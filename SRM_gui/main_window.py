@@ -5,8 +5,10 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QTabWidget, QMessageBox,
     QSplitter, QDialog, QDialogButtonBox, QLineEdit, QComboBox,
     QInputDialog, QStackedWidget, QRadioButton, QButtonGroup,
-    QScrollArea, QHBoxLayout, QGridLayout, QSizePolicy
+    QScrollArea, QHBoxLayout, QGridLayout, QSizePolicy, QAction,
+    QTabBar
 )
+from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QPalette, QColor, QFont, QBrush
 from PyQt5.QtCore import Qt
 from SRM_core.parser import parse_response
@@ -18,7 +20,10 @@ import numpy as np
 from obspy import read_inventory
 import configparser
 import copy
+import json
 from obspy.clients.nrl import NRL
+from pathlib import Path
+import colorsys
 
 
 class MplCanvas(FigureCanvas):
@@ -33,88 +38,351 @@ class MplCanvas(FigureCanvas):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Field", "Value"])
-        self.setWindowTitle("Station Response Manager")
-        self.resize(1280, 720)
-        self.menu = self.menuBar()
-        file_menu = self.menu.addMenu("File")
+        self.setWindowTitle("Seismic Inventory Manager")
+        self.resize(1200, 700)
 
-        new_action = file_menu.addAction("New")
-        new_action.triggered.connect(self.new_project)
+        self.loaded_files = {}   # { filepath: Inventory }
+        self.open_tabs = {}      # { (type, id): QWidget }
 
-        open_action = file_menu.addAction("Open...")
-        open_action.triggered.connect(self.open_file)
+        self.setup_menu()
+        self.setup_ui()
 
-        save_action = file_menu.addAction("Save")
-        save_action.triggered.connect(self.save_project)
+    def setup_menu(self):
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("File")
 
-        exit_action = file_menu.addAction("Exit")
+        add_data = QAction("Add Data", self)
+        add_data.triggered.connect(self.add_data)
+        file_menu.addAction(add_data)
+        save_all = QAction("Save All Files", self)
+        save_all.triggered.connect(self.save_all_files)
+        file_menu.addAction(save_all)
+        exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
-        self.tree.itemChanged.connect(self.handle_tree_edit)
-        self.central = QWidget()
-        self.setCentralWidget(self.central)
+        file_menu.addAction(exit_action)
+
+    def setup_ui(self):
         self.tabs = QTabWidget()
-        layout = QVBoxLayout(self.central)
-        layout.addWidget(self.tree)
-        layout.addWidget(self.tabs)
-        self.viewer_tab = QWidget()
-        self.info_label = QLabel("No file loaded.")
-        layout.addWidget(self.info_label)
-        self.viewer_layout = QVBoxLayout(self.viewer_tab)
-        self.viewer_layout.addWidget(self.tree)
-        self.viewer_layout.addWidget(self.info_label)
-        self.tabs.addTab(self.viewer_tab, "Explorer")
-        self.tree.setColumnWidth(0, int(self.tree.width() * 0.5))
-        self.tree.setColumnWidth(1, int(self.tree.width() * 0.5))
-        self.response_tab = QWidget()
-        self.response_layout = QVBoxLayout(self.response_tab)
-        self.response_label = QLabel("Select a channel's response to edit.")
-        self.response_layout.addWidget(self.response_label)
-        self.tabs.addTab(self.response_tab, "Response")
-        self.tree.itemDoubleClicked.connect(self.handle_tree_double_click)
+        self.setCentralWidget(self.tabs)
 
-    def handle_tree_double_click(self, item, column):
-        data = item.data(0, Qt.UserRole)
-        if data and isinstance(data, tuple) and data[0] == "response":
-            response = data[1]
-            self.load_response_editor(response)
+        self.manager_tab = ManagerTab(main_window=self)
+        self.tabs.addTab(self.manager_tab, "Manager")
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self.close_tab)
+        self.tabs.tabBar().setTabButton(0, QTabBar.RightSide, None)
 
-    def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Response File", "", "All Files (*.xml *.resp *.dless);;StationXML (*.xml);;RESP (*.resp);;Dataless SEED (*.dless *dataless)"
-        )
-        if path:
+    def save_all_files(self):
+
+        for filepath, inv in self.loaded_files.items():
             try:
-                inv = parse_response(path)
-                self.info_label.setText(f"Loaded: {os.path.basename(path)}")
-                self.populate_tree(inv)
+                inv.write(filepath, format="STATIONXML")
             except Exception as e:
-                self.info_label.setText(f"Error: {e}")
-        self.current_inventory = inv
+                QMessageBox.warning(
+                    self, "Error", f"Failed to save {filepath}:\n{e}")
+        QMessageBox.information(self, "Save Complete",
+                                "All inventories saved successfully.")
 
-    def new_project(self):
-        QMessageBox.information(
-            self, "New", "New project not yet implemented.")
-
-    def save_project(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save StationXML", "", "StationXML (*.xml)"
-        )
-        if not path:
+    def add_data(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Data Folder")
+        if not folder:
             return
 
-        try:
-            if hasattr(self, 'current_inventory'):
-                self.current_inventory.write(path, format="STATIONXML")
-                QMessageBox.information(self, "Saved", f"Saved to {path}")
-            else:
-                QMessageBox.warning(self, "Error", "No inventory to save.")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Failed", f"Error: {e}")
+        exts = (".xml", ".dataless", ".dless")
+        for file in Path(folder).rglob("*"):
+            if file.suffix.lower() in exts:
+                try:
+                    abs_path = str(file.resolve())
+                    inv = read_inventory(abs_path)
+                    self.loaded_files[abs_path] = inv
+                    self.manager_tab.add_file_to_tree(abs_path, inv)
+                except Exception as e:
+                    QMessageBox.warning(
+                        self, "Error", f"Failed to load {file}:\n{e}")
+
+    def open_explorer_tab(self, filepath, inventory):
+        key = ("explorer", filepath)
+        if key not in self.open_tabs:
+            explorer = ExplorerTab(filepath=filepath, main_window=self)
+            explorer.populate_tree(inventory)
+            index = self.tabs.addTab(
+                explorer, f"Explorer - {os.path.basename(filepath)}")
+            self.open_tabs[key] = explorer
+            self.tabs.setCurrentIndex(index)
+        else:
+            index = self.tabs.indexOf(self.open_tabs[key])
+            self.tabs.setCurrentIndex(index)
+
+    def open_response_tab(self, response_id, response_data, explorer_tab):
+        key = ("response", response_id)
+        if key not in self.open_tabs:
+            response_tab = ResponseTab(response_data, self, explorer_tab)
+            index = self.tabs.addTab(response_tab, f"Response - {response_id}")
+            self.open_tabs[key] = response_tab
+            self.tabs.setCurrentIndex(index)
+        else:
+            index = self.tabs.indexOf(self.open_tabs[key])
+            self.tabs.setCurrentIndex(index)
+
+    def close_tab(self, index):
+        if index == 0:
+            return
+        widget = self.tabs.widget(index)
+        for key, tab in list(self.open_tabs.items()):
+            if tab == widget:
+                del self.open_tabs[key]
+                break
+        self.tabs.removeTab(index)
+
+
+class ManagerTab(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+
+        layout = QHBoxLayout(self)
+        self.clipboard_item = None
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        self.all_stations = []
+        self.network_colors = {}
+        self.file_tree = QTreeWidget()
+        self.file_tree.setHeaderLabels(["Loaded Inventories"])
+        self.file_tree.itemDoubleClicked.connect(self.handle_item_double_click)
+        left_layout.addWidget(self.file_tree)
+
+        btn_layout = QHBoxLayout()
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(self.copy_selected_item)
+        btn_layout.addWidget(copy_btn)
+
+        paste_btn = QPushButton("Paste")
+        paste_btn.clicked.connect(self.paste_to_selected_item)
+        btn_layout.addWidget(paste_btn)
+
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self.delete_selected_item)
+        btn_layout.addWidget(delete_btn)
+
+        left_layout.addLayout(btn_layout)
+        layout.addWidget(left_widget)
+
+        self.map_view = QWebEngineView()
+        layout.addWidget(self.map_view)
+        current_dir = Path(__file__)
+        map_template_path = current_dir.parent / "map_template.html"
+        with map_template_path.open("r", encoding="utf-8") as f:
+            html_template = f.read()
+
+        self.map_view.setHtml(html_template)
+
+        layout.setStretch(0, 1)
+        layout.setStretch(1, 2)
+
+    def get_color_for_network(self, network_name):
+        if network_name not in self.network_colors:
+            existing = len(self.network_colors)
+            # golden ratio conjugate for good spacing
+            hue = (existing * 0.618033988749895) % 1
+            # saturation and value fixed for good visibility
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.95)
+            hex_color = '#{:02x}{:02x}{:02x}'.format(
+                int(r*255), int(g*255), int(b*255))
+            self.network_colors[network_name] = hex_color
+        return self.network_colors[network_name]
+
+    def add_file_to_tree(self, abs_filepath, inventory):
+        file_item = QTreeWidgetItem([os.path.basename(abs_filepath)])
+        file_item.setData(0, Qt.UserRole, ("file", abs_filepath))
+        self.file_tree.addTopLevelItem(file_item)
+
+        for net in inventory.networks:
+            net_item = QTreeWidgetItem([f"Network: {net.code}"])
+            net_item.setData(0, Qt.UserRole, ("network", net))
+            file_item.addChild(net_item)
+
+            for sta in net.stations:
+                sta_item = QTreeWidgetItem([f"Station: {sta.code}"])
+                sta_item.setData(0, Qt.UserRole, ("station", sta))
+                net_item.addChild(sta_item)
+
+                for chan in sta.channels:
+                    chan_item = QTreeWidgetItem([f"Channel: {chan.code}"])
+                    chan_item.setData(0, Qt.UserRole, ("channel", chan))
+                    sta_item.addChild(chan_item)
+
+                file_item.setExpanded(True)
+
+        for net in inventory.networks:
+            color = self.get_color_for_network(net.code)
+            for sta in net.stations:
+                self.all_stations.append({
+                    "name": f"{net.code}.{sta.code}",
+                    "lat": sta.latitude,
+                    "lon": sta.longitude,
+                    "network": net.code,
+                    "color": color
+                })
+        js_code = f"addStations({json.dumps(self.all_stations)});"
+        self.map_view.page().runJavaScript(js_code)
+
+    def handle_item_double_click(self, item, column):
+        print("Double-click on item:", item.text(0))
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == "file":
+            filepath = data[1]
+            inventory = self.main_window.loaded_files.get(filepath)
+            if inventory:
+                self.main_window.open_explorer_tab(
+                    filepath=filepath, inventory=inventory)
+
+    def copy_selected_item(self):
+        item = self.file_tree.currentItem()
+        if item:
+            self.clipboard_item = item.data(0, Qt.UserRole)
+            QMessageBox.information(self, "Copied", f"Copied: {item.text(0)}")
+        else:
+            QMessageBox.warning(self, "No Selection",
+                                "Please select an item to copy.")
+
+    def paste_to_selected_item(self):
+        if not self.clipboard_item:
+            QMessageBox.warning(self, "Clipboard Empty", "Copy an item first.")
+            return
+
+        target_item = self.file_tree.currentItem()
+        if not target_item:
+            QMessageBox.warning(self, "No Selection",
+                                "Select a parent item to paste into.")
+            return
+
+        target_data = target_item.data(0, Qt.UserRole)
+        if not target_data:
+            QMessageBox.warning(self, "Invalid Target", "Cannot paste here.")
+            return
+
+        from copy import deepcopy
+        type_, obj = self.clipboard_item
+        pasted_item = None
+
+        if type_ == "station" and target_data[0] == "network":
+            station_copy = deepcopy(obj)
+            target_data[1].stations.append(station_copy)
+            pasted_item = self._add_station_to_tree(target_item, station_copy)
+
+        elif type_ == "channel" and target_data[0] == "station":
+            chan_copy = deepcopy(obj)
+            target_data[1].channels.append(chan_copy)
+            pasted_item = self._add_channel_to_tree(target_item, chan_copy)
+
+        elif type_ == "network" and target_data[0] == "file":
+            net_copy = deepcopy(obj)
+            inv = self.main_window.loaded_files.get(target_data[1])
+            if inv:
+                inv.networks.append(net_copy)
+                pasted_item = self._add_network_to_tree(target_item, net_copy)
+
+        else:
+            QMessageBox.warning(self, "Invalid Paste",
+                                "Cannot paste this item here.")
+
+        if pasted_item:
+            target_item.setExpanded(True)
+
+    def delete_selected_item(self):
+        item = self.file_tree.currentItem()
+        if not item:
+            QMessageBox.warning(self, "No Selection",
+                                "Select an item to delete.")
+            return
+
+        parent = item.parent()
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            QMessageBox.warning(self, "Invalid Selection",
+                                "Cannot delete this item.")
+            return
+
+        type_, obj = data
+
+        if type_ == "station" and parent:
+            net_data = parent.data(0, Qt.UserRole)
+            if net_data and net_data[0] == "network":
+                net_data[1].stations.remove(obj)
+                parent.removeChild(item)
+        elif type_ == "channel" and parent:
+            sta_data = parent.data(0, Qt.UserRole)
+            if sta_data and sta_data[0] == "station":
+                sta_data[1].channels.remove(obj)
+                parent.removeChild(item)
+        else:
+            QMessageBox.warning(self, "Invalid Delete",
+                                "Cannot delete this type of item.")
+
+    def _add_network_to_tree(self, file_item, net):
+        net_item = QTreeWidgetItem([f"Network: {net.code}"])
+        net_item.setData(0, Qt.UserRole, ("network", net))
+        file_item.addChild(net_item)
+
+        for sta in net.stations:
+            self._add_station_to_tree(net_item, sta)
+
+        return net_item
+
+    def _add_station_to_tree(self, net_item, sta):
+        sta_item = QTreeWidgetItem([f"Station: {sta.code}"])
+        sta_item.setData(0, Qt.UserRole, ("station", sta))
+        net_item.addChild(sta_item)
+
+        for chan in sta.channels:
+            self._add_channel_to_tree(sta_item, chan)
+
+        return sta_item
+
+    def _add_channel_to_tree(self, sta_item, chan):
+        chan_item = QTreeWidgetItem([f"Channel: {chan.code}"])
+        chan_item.setData(0, Qt.UserRole, ("channel", chan))
+        sta_item.addChild(chan_item)
+
+        return chan_item
+
+
+class ExplorerTab(QWidget):
+    def __init__(self, filepath, main_window):
+        super().__init__()
+        self.filepath = filepath
+        self.main_window = main_window
+        self.current_inventory = None
+
+        layout = QVBoxLayout(self)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Field", "Value"])
+        self.tree.itemChanged.connect(self.handle_tree_edit)
+        self.tree.itemDoubleClicked.connect(self.handle_tree_double_click)
+        layout.addWidget(self.tree)
+
+        self.info_label = QLabel(f"Loaded file: {filepath}")
+        layout.addWidget(self.info_label)
+
+    def apply_modified_response(self, response):
+        updated = False
+        for net in self.current_inventory.networks:
+            for sta in net.stations:
+                for chan in sta.channels:
+                    if chan.response is response:
+                        chan.response = response
+                        updated = True
+
+        if updated:
+            QMessageBox.information(
+                self, "Saved", "Response updated successfully.")
+            self.populate_tree(self.current_inventory)
+        else:
+            QMessageBox.warning(
+                self, "Error", "Response not found in inventory.")
 
     def populate_tree(self, inv):
         self.tree.clear()
+        self.current_inventory = inv
         try:
             for net in inv.networks:
                 net_item = QTreeWidgetItem([f"Network: {net.code}", ""])
@@ -247,6 +515,44 @@ class MainWindow(QMainWindow):
                 self, "Edit Error", f"Failed to update {attr}: {e}")
             item.setText(1, str(old_value))
 
+    def handle_tree_double_click(self, item, column):
+        data = item.data(0, Qt.UserRole)
+        if data and isinstance(data, tuple) and data[0] == "response":
+            response = data[1]
+
+            # Safely traverse the parent chain
+            chan_item = item.parent() if item.parent() else None
+            sta_item = chan_item.parent() if chan_item and chan_item.parent() else None
+            net_item = sta_item.parent() if sta_item and sta_item.parent() else None
+
+            if not (chan_item and sta_item and net_item):
+                QMessageBox.warning(
+                    self, "Error", "Could not identify response hierarchy.")
+                return
+
+            chan_code = chan_item.text(0).replace("Channel: ", "").strip()
+            sta_code = sta_item.text(0).replace("Station: ", "").strip()
+            net_code = net_item.text(0).replace("Network: ", "").strip()
+
+            unique_id = f"{net_code}.{sta_code}..{chan_code}"
+
+            # Open the response tab with this response and unique ID
+            self.main_window.open_response_tab(
+                response_id=unique_id,
+                response_data=response,
+                explorer_tab=self
+            )
+
+
+class ResponseTab(QWidget):
+    def __init__(self, response_data, main_window, explorer_tab):
+        super().__init__()
+        self.response = response_data
+        self.main_window = main_window
+        self.explorer_tab = explorer_tab
+        self.response_layout = QVBoxLayout(self)
+        self.load_response_editor(self.response)
+
     def load_response_editor(self, response):
         self.selected_response = response
 
@@ -287,9 +593,6 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.canvas)
 
         self.response_layout.addWidget(splitter)
-
-        self.tabs.setCurrentWidget(self.response_tab)
-
         self.plot_response(response)
 
     def plot_response(self, response):
@@ -327,26 +630,8 @@ class MainWindow(QMainWindow):
         self.canvas.draw()
 
     def save_edited_response(self):
-        if not hasattr(self, "selected_response"):
-            return
-
-        updated = False
-        for net in self.current_inventory.networks:
-            for sta in net.stations:
-                for chan in sta.channels:
-                    if chan.response == self.selected_response:
-                        chan.response = self.selected_response
-                        updated = True
-
-        if updated:
-            QMessageBox.information(
-                self, "Saved", "Response updated successfully.")
-            self.populate_tree(self.current_inventory)
-            self.plot_response(self.selected_response)
-
-            self.load_response_editor(self.selected_response)
-        else:
-            QMessageBox.warning(self, "Error", "Could not apply changes.")
+        if hasattr(self, "selected_response"):
+            self.explorer_tab.apply_modified_response(self.selected_response)
 
     def populate_stage_tree(self, response):
         self.stage_tree.clear()

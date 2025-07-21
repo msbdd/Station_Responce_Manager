@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Local Station Map</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        html, body, #map {
+            height: 100%;
+            margin: 0; padding: 0;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+    var map = L.map('map').setView([0, 0], 2);
+
+    L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: 'Kartendaten: © OpenStreetMap-Mitwirkende, SRTM | Kartendarstellung: © OpenTopoMap (CC-BY-SA)'
+    }).addTo(map);
+
+    var stationLayer = L.layerGroup().addTo(map);
+
+    function addStations(stations) {
+        stationLayer.clearLayers();
+        stations.forEach(function(station) {
+            var marker = L.marker([station.lat, station.lon], {
+                title: station.name,
+                icon: L.divIcon({
+                    className: 'triangle-icon',
+                    html: `<div style="color: ${station.color}; font-size: 40px;">&#9650;</div>`,
+                    iconSize: [40, 40],
+                    iconAnchor: [20, 40],
+                })
+            });
+            marker.bindPopup('<b>' + station.name + '</b><br>Network: ' + station.network);
+            stationLayer.addLayer(marker);
+        });
+    }
+
+    function focusOnStation(lat, lon, zoom=10) {
+        map.setView([lat, lon], zoom);
+    }
+</script>
+
+<style>
+    .triangle-icon {
+        text-align: center;
+    }
+</style>
+
+</body>
+</html>
