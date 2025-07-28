@@ -9,15 +9,19 @@ from PyQt5.QtWidgets import (
     QTabBar
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtGui import QPalette, QColor, QFont, QBrush
+from PyQt5.QtGui import QColor, QFont, QBrush
 from PyQt5.QtCore import Qt
 from SRM_core.parser import parse_response
 import os
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from obspy.signal.invsim import evalresp
+from obspy import Inventory
+from obspy.core.inventory.response import Response
+
 import numpy as np
 from obspy import read_inventory
+from obspy.core.inventory import Station, Network, Channel
 import configparser
 import copy
 import json
@@ -50,7 +54,9 @@ class MainWindow(QMainWindow):
     def setup_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
-
+        new_inventory = QAction("New Inventory...", self)
+        new_inventory.triggered.connect(self.create_new_inventory)
+        file_menu.addAction(new_inventory)
         add_data = QAction("Add Data", self)
         add_data.triggered.connect(self.add_data)
         file_menu.addAction(add_data)
@@ -76,6 +82,12 @@ class MainWindow(QMainWindow):
         for filepath, inv in self.loaded_files.items():
             try:
                 inv.write(filepath, format="STATIONXML")
+                for (tab_type, tab_id), widget in self.open_tabs.items():
+                    if tab_type == "explorer" and isinstance(widget, ExplorerTab):
+                        inv = self.loaded_files.get(tab_id)
+                        if inv:
+                            widget.populate_tree(inv)
+                self.manager_tab.refresh()
             except Exception as e:
                 QMessageBox.warning(
                     self, "Error", f"Failed to save {filepath}:\n{e}")
@@ -133,6 +145,22 @@ class MainWindow(QMainWindow):
                 break
         self.tabs.removeTab(index)
 
+    def create_new_inventory(self):
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Create New Inventory", "", "StationXML Files (*.xml);;All Files (*)"
+        )
+        if not filepath:
+            return
+
+        try:
+            inv = Inventory(networks=[], source="Seismic Response Manager")
+            self.loaded_files[filepath] = inv
+            inv.write(filepath, format="STATIONXML")
+            self.manager_tab.add_file_to_tree(filepath, inv)
+            self.open_explorer_tab(filepath, inv)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to create inventory:\n{e}")
+
 
 class ManagerTab(QWidget):
     def __init__(self, main_window):
@@ -149,8 +177,12 @@ class ManagerTab(QWidget):
         self.file_tree.setHeaderLabels(["Loaded Inventories"])
         self.file_tree.itemDoubleClicked.connect(self.handle_item_double_click)
         left_layout.addWidget(self.file_tree)
-
+        self.file_tree.itemSelectionChanged.connect(self.handle_selection_changed)
         btn_layout = QHBoxLayout()
+        new_btn = QPushButton("New")
+        new_btn.clicked.connect(self.new_item)
+        btn_layout.addWidget(new_btn)
+
         copy_btn = QPushButton("Copy")
         copy_btn.clicked.connect(self.copy_selected_item)
         btn_layout.addWidget(copy_btn)
@@ -181,9 +213,7 @@ class ManagerTab(QWidget):
     def get_color_for_network(self, network_name):
         if network_name not in self.network_colors:
             existing = len(self.network_colors)
-            # golden ratio conjugate for good spacing
             hue = (existing * 0.618033988749895) % 1
-            # saturation and value fixed for good visibility
             r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.95)
             hex_color = '#{:02x}{:02x}{:02x}'.format(
                 int(r*255), int(g*255), int(b*255))
@@ -193,6 +223,8 @@ class ManagerTab(QWidget):
     def add_file_to_tree(self, abs_filepath, inventory):
         file_item = QTreeWidgetItem([os.path.basename(abs_filepath)])
         file_item.setData(0, Qt.UserRole, ("file", abs_filepath))
+        file_item.setExpanded(True)
+        file_item.setFlags(file_item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled)
         self.file_tree.addTopLevelItem(file_item)
 
         for net in inventory.networks:
@@ -345,6 +377,84 @@ class ManagerTab(QWidget):
 
         return chan_item
 
+    def new_item(self):
+        selected_item = self.file_tree.currentItem()
+
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Select a parent to add a new item.")
+            return
+
+        data = selected_item.data(0, Qt.UserRole)
+        if not data:
+            return
+
+        type_, obj = data
+        if type_ == "file":
+            filepath = obj
+            inventory = self.main_window.loaded_files.get(filepath)
+            if not inventory:
+                inventory = Inventory()
+                self.main_window.loaded_files[filepath] = inventory
+
+            net = Network(code="XX")
+            inventory.networks.append(net)
+            print(f"Added new network 'XX' to {filepath}")
+            net_item = self._add_network_to_tree(selected_item, net)
+            selected_item.setExpanded(True)
+
+        elif type_ == "network":
+            net = obj
+            sta = Station(code="STA", latitude=0.0, longitude=0.0, elevation=0.0)
+            net.stations.append(sta)
+            sta_item = self._add_station_to_tree(selected_item, sta)
+            selected_item.setExpanded(True)
+
+        elif type_ == "station":
+            sta = obj
+            chan = Channel(
+                code="BHZ",
+                location_code="",
+                latitude=sta.latitude,
+                longitude=sta.longitude,
+                depth=0.0,
+                elevation=sta.elevation,
+                azimuth=0.0,
+                dip=-90.0,
+                sample_rate=100.0
+            )
+
+            chan.response = Response() 
+
+            sta.channels.append(chan)
+            chan_item = self._add_channel_to_tree(selected_item, chan)
+            selected_item.setExpanded(True)
+
+        else:
+            QMessageBox.warning(self, "Invalid Target",
+                                "You can only add new items under File, Network, or Station.")
+
+    def handle_selection_changed(self):
+        selected_items = self.file_tree.selectedItems()
+        if not selected_items:
+            return
+
+        item = selected_items[0]
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == "station":
+            sta = data[1]
+            try:
+                lat = sta.latitude
+                lon = sta.longitude
+                js = f"focusOnStation({lat}, {lon}, 10);"
+                self.map_view.page().runJavaScript(js)
+            except Exception as e:
+                print(f"Error focusing on station: {e}")
+
+    def refresh(self):
+        self.file_tree.clear()
+        for filepath, inventory in self.main_window.loaded_files.items():
+            self.add_file_to_tree(filepath, inventory)
+
 
 class ExplorerTab(QWidget):
     def __init__(self, filepath, main_window):
@@ -354,14 +464,124 @@ class ExplorerTab(QWidget):
         self.current_inventory = None
 
         layout = QVBoxLayout(self)
+
+        top_layout = QHBoxLayout()
+        self.object_label = QLabel("No item selected")
+        self.new_button = QPushButton("New")
+        self.new_button.setEnabled(True)
+        self.new_button.clicked.connect(self.create_new_field)
+        top_layout.addWidget(self.object_label)
+        top_layout.addStretch()
+        top_layout.addWidget(self.new_button)
+        layout.addLayout(top_layout)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Field", "Value"])
         self.tree.itemChanged.connect(self.handle_tree_edit)
         self.tree.itemDoubleClicked.connect(self.handle_tree_double_click)
         layout.addWidget(self.tree)
-
+        self.tree.setColumnWidth(0, 300)
+        self.tree.setColumnWidth(1, 150)
         self.info_label = QLabel(f"Loaded file: {filepath}")
         layout.addWidget(self.info_label)
+
+    def create_new_field(self):
+        item = self.tree.currentItem()
+        if not item:
+            QMessageBox.warning(self, "No Selection", "Please select an item.")
+            return
+
+        label_text = item.text(0)
+        parent_inventory = self.current_inventory
+
+        if label_text.startswith("Network:"):
+            net_code = label_text.replace("Network:", "").strip()
+            net = next((n for n in parent_inventory.networks if n.code == net_code), None)
+            if not net:
+                QMessageBox.warning(self, "Error", "Could not find target Network.")
+                return
+
+            sta = Station(code="STA", latitude=0.0, longitude=0.0, elevation=0.0)
+            net.stations.append(sta)
+            self.populate_tree(parent_inventory)
+            return
+
+        elif label_text.startswith("Station:"):
+            ref_data = item.data(0, Qt.UserRole)
+            if not ref_data or not isinstance(ref_data, tuple) or ref_data[0] != "station":
+                QMessageBox.warning(self, "Error", "Station reference not found.")
+                return
+
+            sta = ref_data[1]
+
+            # Get parent network
+            parent = item.parent()
+            net_code = None
+            while parent:
+                label = parent.text(0)
+                if label.startswith("Network:"):
+                    net_code = label.replace("Network:", "").strip()
+                    break
+                parent = parent.parent()
+
+            if not net_code:
+                QMessageBox.warning(self, "Error", "Could not find parent Network for Station.")
+                return
+
+            net = next((n for n in parent_inventory.networks if n.code == net_code), None)
+            if not net:
+                QMessageBox.warning(self, "Error", "Could not find Network in inventory.")
+                return
+
+            chan = Channel(
+                code="BHZ",
+                location_code="",
+                latitude=sta.latitude,
+                longitude=sta.longitude,
+                depth=0.0,
+                elevation=sta.elevation,
+                azimuth=0.0,
+                dip=-90.0,
+                sample_rate=100.0
+            )
+            chan.response = Response()
+            sta.channels.append(chan)
+            self.populate_tree(parent_inventory)
+            return
+
+        elif label_text.startswith("Channel:"):
+            QMessageBox.information(self, "Info", "Channels cannot contain sub-items.")
+            return
+
+        elif label_text == "Response" or label_text.startswith("Stage"):
+            QMessageBox.information(self, "Info", "Cannot add fields inside a response.")
+            return
+
+        obj = self.current_obj
+        if not obj:
+            QMessageBox.warning(self, "Error", "No valid object selected.")
+            return
+
+        all_attrs = sorted([
+            attr for attr in dir(obj)
+            if not attr.startswith("_")
+            and not callable(getattr(obj, attr))
+            and isinstance(getattr(obj, attr, None), (str, int, float, type(None)))
+        ])
+
+        missing_attrs = [a for a in all_attrs if getattr(obj, a, None) in (None, "")]
+
+        if not missing_attrs:
+            QMessageBox.information(self, "Info", "No missing editable fields found.")
+            return
+
+        attr, ok = QInputDialog.getItem(
+            self, "Add Field", "Select a field to add:", missing_attrs, editable=False
+        )
+
+        if ok and attr:
+            setattr(obj, attr, "")
+            self.populate_tree(self.current_inventory)
 
     def apply_modified_response(self, response):
         updated = False
@@ -400,6 +620,7 @@ class ExplorerTab(QWidget):
 
                 for sta in net.stations:
                     sta_item = QTreeWidgetItem([f"Station: {sta.code}", ""])
+                    sta_item.setData(0, Qt.UserRole, ("station", sta))
                     net_item.addChild(sta_item)
 
                     for field in dir(sta):
@@ -483,6 +704,30 @@ class ExplorerTab(QWidget):
                                                 f"Zero {j}", f"{z.real} + {z.imag}j"])
         except Exception as e:
             QTreeWidgetItem(self.tree, ["Error", str(e)])
+        self.tree.itemSelectionChanged.connect(self.on_tree_selection_changed)
+        self.current_obj = None
+        self.tree.expandAll()
+
+    def on_tree_selection_changed(self):
+        item = self.tree.currentItem()
+        if not item:
+            self.current_obj = None
+            self.new_button.setEnabled(False)
+            return
+
+        label = item.text(0)
+        valid = True
+
+        if label.startswith("Response") or label.startswith("Stage"):
+            valid = False
+
+        self.new_button.setEnabled(valid)
+
+        ref = item.data(0, Qt.UserRole)
+        if ref and isinstance(ref, tuple):
+            self.current_obj = ref[0]
+        else:
+            self.current_obj = None
 
     def handle_tree_edit(self, item, column):
         if column != 1:
@@ -520,7 +765,6 @@ class ExplorerTab(QWidget):
         if data and isinstance(data, tuple) and data[0] == "response":
             response = data[1]
 
-            # Safely traverse the parent chain
             chan_item = item.parent() if item.parent() else None
             sta_item = chan_item.parent() if chan_item and chan_item.parent() else None
             net_item = sta_item.parent() if sta_item and sta_item.parent() else None
@@ -1078,7 +1322,6 @@ class NRLDialog(QDialog):
 
     def go_back(self):
         if self.in_summary:
-            # From summary, go back to final XML config screen
             self.in_summary = False
             self.stage = "datalogger"
             self.selected_option = None
@@ -1093,7 +1336,6 @@ class NRLDialog(QDialog):
             return
 
         if getattr(self, "_at_final_xml_selection", False):
-            # If we're coming back from XML config screen, go back one step
             self._at_final_xml_selection = False
             path_stack = self.current_path_stack()
             if len(path_stack) > 1:
