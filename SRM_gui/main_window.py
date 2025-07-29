@@ -1,18 +1,20 @@
 # gui/main_window.py
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QFileDialog, QLabel, QTableWidget, QTableWidgetItem,
-    QTreeWidget, QTreeWidgetItem, QTabWidget, QMessageBox,
+    QFileDialog, QLabel, QTreeWidget, QTreeWidgetItem, QTabWidget, QMessageBox,
     QSplitter, QDialog, QDialogButtonBox, QLineEdit, QComboBox,
-    QInputDialog, QStackedWidget, QRadioButton, QButtonGroup,
-    QScrollArea, QHBoxLayout, QGridLayout, QSizePolicy, QAction,
+    QInputDialog, QGroupBox, QRadioButton,
+    QScrollArea, QHBoxLayout, QFormLayout, QAction,
     QTabBar
 )
+from copy import deepcopy
+
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QColor, QFont, QBrush
-from PyQt5.QtCore import Qt
-from SRM_core.parser import parse_response
+from PyQt5.QtCore import Qt, QTimer
+from SRM_core.utils import parse_response, combine_resp
 import os
+import sys
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from obspy.signal.invsim import evalresp
@@ -159,7 +161,8 @@ class MainWindow(QMainWindow):
             self.manager_tab.add_file_to_tree(filepath, inv)
             self.open_explorer_tab(filepath, inv)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to create inventory:\n{e}")
+            QMessageBox.warning(
+                self, "Error", f"Failed to create inventory:\n{e}")
 
 
 class ManagerTab(QWidget):
@@ -177,7 +180,8 @@ class ManagerTab(QWidget):
         self.file_tree.setHeaderLabels(["Loaded Inventories"])
         self.file_tree.itemDoubleClicked.connect(self.handle_item_double_click)
         left_layout.addWidget(self.file_tree)
-        self.file_tree.itemSelectionChanged.connect(self.handle_selection_changed)
+        self.file_tree.itemSelectionChanged.connect(
+            self.handle_selection_changed)
         btn_layout = QHBoxLayout()
         new_btn = QPushButton("New")
         new_btn.clicked.connect(self.new_item)
@@ -224,7 +228,8 @@ class ManagerTab(QWidget):
         file_item = QTreeWidgetItem([os.path.basename(abs_filepath)])
         file_item.setData(0, Qt.UserRole, ("file", abs_filepath))
         file_item.setExpanded(True)
-        file_item.setFlags(file_item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+        file_item.setFlags(file_item.flags() |
+                           Qt.ItemIsSelectable | Qt.ItemIsEnabled)
         self.file_tree.addTopLevelItem(file_item)
 
         for net in inventory.networks:
@@ -292,7 +297,6 @@ class ManagerTab(QWidget):
             QMessageBox.warning(self, "Invalid Target", "Cannot paste here.")
             return
 
-        from copy import deepcopy
         type_, obj = self.clipboard_item
         pasted_item = None
 
@@ -381,7 +385,8 @@ class ManagerTab(QWidget):
         selected_item = self.file_tree.currentItem()
 
         if not selected_item:
-            QMessageBox.warning(self, "No Selection", "Select a parent to add a new item.")
+            QMessageBox.warning(self, "No Selection",
+                                "Select a parent to add a new item.")
             return
 
         data = selected_item.data(0, Qt.UserRole)
@@ -404,7 +409,8 @@ class ManagerTab(QWidget):
 
         elif type_ == "network":
             net = obj
-            sta = Station(code="STA", latitude=0.0, longitude=0.0, elevation=0.0)
+            sta = Station(code="STA", latitude=0.0,
+                          longitude=0.0, elevation=0.0)
             net.stations.append(sta)
             sta_item = self._add_station_to_tree(selected_item, sta)
             selected_item.setExpanded(True)
@@ -423,7 +429,7 @@ class ManagerTab(QWidget):
                 sample_rate=100.0
             )
 
-            chan.response = Response() 
+            chan.response = Response()
 
             sta.channels.append(chan)
             chan_item = self._add_channel_to_tree(selected_item, chan)
@@ -496,12 +502,15 @@ class ExplorerTab(QWidget):
 
         if label_text.startswith("Network:"):
             net_code = label_text.replace("Network:", "").strip()
-            net = next((n for n in parent_inventory.networks if n.code == net_code), None)
+            net = next(
+                (n for n in parent_inventory.networks if n.code == net_code), None)
             if not net:
-                QMessageBox.warning(self, "Error", "Could not find target Network.")
+                QMessageBox.warning(
+                    self, "Error", "Could not find target Network.")
                 return
 
-            sta = Station(code="STA", latitude=0.0, longitude=0.0, elevation=0.0)
+            sta = Station(code="STA", latitude=0.0,
+                          longitude=0.0, elevation=0.0)
             net.stations.append(sta)
             self.populate_tree(parent_inventory)
             return
@@ -509,7 +518,8 @@ class ExplorerTab(QWidget):
         elif label_text.startswith("Station:"):
             ref_data = item.data(0, Qt.UserRole)
             if not ref_data or not isinstance(ref_data, tuple) or ref_data[0] != "station":
-                QMessageBox.warning(self, "Error", "Station reference not found.")
+                QMessageBox.warning(
+                    self, "Error", "Station reference not found.")
                 return
 
             sta = ref_data[1]
@@ -525,12 +535,15 @@ class ExplorerTab(QWidget):
                 parent = parent.parent()
 
             if not net_code:
-                QMessageBox.warning(self, "Error", "Could not find parent Network for Station.")
+                QMessageBox.warning(
+                    self, "Error", "Could not find parent Network for Station.")
                 return
 
-            net = next((n for n in parent_inventory.networks if n.code == net_code), None)
+            net = next(
+                (n for n in parent_inventory.networks if n.code == net_code), None)
             if not net:
-                QMessageBox.warning(self, "Error", "Could not find Network in inventory.")
+                QMessageBox.warning(
+                    self, "Error", "Could not find Network in inventory.")
                 return
 
             chan = Channel(
@@ -550,11 +563,13 @@ class ExplorerTab(QWidget):
             return
 
         elif label_text.startswith("Channel:"):
-            QMessageBox.information(self, "Info", "Channels cannot contain sub-items.")
+            QMessageBox.information(
+                self, "Info", "Channels cannot contain sub-items.")
             return
 
         elif label_text == "Response" or label_text.startswith("Stage"):
-            QMessageBox.information(self, "Info", "Cannot add fields inside a response.")
+            QMessageBox.information(
+                self, "Info", "Cannot add fields inside a response.")
             return
 
         obj = self.current_obj
@@ -569,10 +584,12 @@ class ExplorerTab(QWidget):
             and isinstance(getattr(obj, attr, None), (str, int, float, type(None)))
         ])
 
-        missing_attrs = [a for a in all_attrs if getattr(obj, a, None) in (None, "")]
+        missing_attrs = [a for a in all_attrs if getattr(
+            obj, a, None) in (None, "")]
 
         if not missing_attrs:
-            QMessageBox.information(self, "Info", "No missing editable fields found.")
+            QMessageBox.information(
+                self, "Info", "No missing editable fields found.")
             return
 
         attr, ok = QInputDialog.getItem(
@@ -780,7 +797,6 @@ class ExplorerTab(QWidget):
 
             unique_id = f"{net_code}.{sta_code}..{chan_code}"
 
-            # Open the response tab with this response and unique ID
             self.main_window.open_response_tab(
                 response_id=unique_id,
                 response_data=response,
@@ -1073,83 +1089,204 @@ class ResponseTab(QWidget):
                         self, "No Response", "Selected channel has no response.")
 
     def replace_response(self):
-        choice, ok = QInputDialog.getItem(
-            self, "Replace Response",
-            "Choose source of replacement response:",
-            ["Open from file", "Select from opened", "Load from local NRL folder"],
-            0, False
-        )
+        try:
+            folder = resource_path(os.path.join("resources", "NRL"))
+            dlg = ResponseSelectionDialog(folder, self)
+            dlg.exec_()
+            new_resp = dlg.get_response()
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Error ", f"{e}")
+        if new_resp and hasattr(
+                self, "selected_response") and self.selected_response:
+            self.selected_response.response_stages = copy.deepcopy(
+                new_resp.response_stages)
+            self.selected_response.instrument_sensitivity = copy.deepcopy(
+                new_resp.instrument_sensitivity)
 
-        if not ok:
-            return
+            self.load_response_editor(self.selected_response)
+            self.plot_response(self.selected_response)
+            QMessageBox.information(
+                self, "Success", "Response loaded from local NRL.")
 
-        if choice == "Open from file":
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Select Response File",
-                "", "StationXML (*.xml);;RESP (*.resp);;Dataless SEED (*.dless *.seed);;All Files (*)"
-            )
-            if not path:
-                return
+
+class ResponseSelectionDialog(QDialog):
+
+    def __init__(self, nrl_root, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Instrument Response")
+        self.setMinimumWidth(600)
+
+        self.nrl = NRL(root=nrl_root)
+        self.nrl_root = nrl_root
+
+        self.sensor_response = None
+        self.digitizer_response = None
+        self.sensor_info = "Not selected"
+        self.digitizer_info = "Not selected"
+        self.final_resp = None
+
+        self._init_ui()
+        self._update_ui()
+
+    def _init_ui(self):
+
+        main_layout = QVBoxLayout(self)
+
+        sensor_group = QGroupBox("Sensor Response")
+        sensor_layout = QFormLayout()
+        self.sensor_status_label = QLabel(self.sensor_info)
+        sensor_buttons_layout = QHBoxLayout()
+        sensor_file_btn = QPushButton("Load from File...")
+        sensor_nrl_btn = QPushButton("Select from NRL...")
+        sensor_buttons_layout.addWidget(sensor_file_btn)
+        sensor_buttons_layout.addWidget(sensor_nrl_btn)
+        sensor_layout.addRow(self.sensor_status_label)
+        sensor_layout.addRow(sensor_buttons_layout)
+        sensor_group.setLayout(sensor_layout)
+
+        datalogger_group = QGroupBox("Datalogger (Digitizer) Response")
+        datalogger_layout = QFormLayout()
+        self.datalogger_status_label = QLabel(self.digitizer_info)
+        datalogger_buttons_layout = QHBoxLayout()
+        datalogger_file_btn = QPushButton("Load from File...")
+        datalogger_nrl_btn = QPushButton("Select from NRL...")
+        datalogger_buttons_layout.addWidget(datalogger_file_btn)
+        datalogger_buttons_layout.addWidget(datalogger_nrl_btn)
+        datalogger_layout.addRow(self.datalogger_status_label)
+        datalogger_layout.addRow(datalogger_buttons_layout)
+        datalogger_group.setLayout(datalogger_layout)
+
+        main_layout.addWidget(sensor_group)
+        main_layout.addWidget(datalogger_group)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        main_layout.addWidget(self.button_box)
+
+        sensor_file_btn.clicked.connect(self.select_sensor_from_file)
+        sensor_nrl_btn.clicked.connect(self.launch_sensor_wizard)
+        datalogger_file_btn.clicked.connect(self.select_digitizer_from_file)
+        datalogger_nrl_btn.clicked.connect(self.launch_digitizer_wizard)
+
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+    def launch_sensor_wizard(self):
+        wizard = NRLWizard(self.nrl_root, "sensor", self)
+        if wizard.exec_() == QDialog.Accepted:
+            keys, desc = wizard.get_result()
+            if keys:
+                try:
+                    self.sensor_response = self.nrl.get_sensor_response(keys)
+                    self.sensor_info = f"From NRL: {desc}"
+                except Exception as e:
+                    QMessageBox.critical(
+                        self, "NRL Error", f"Failed to get sensor response:\n{e}")
+                    self.sensor_response = None
+            self._update_ui()
+
+    def launch_digitizer_wizard(self):
+        wizard = NRLWizard(self.nrl_root, "datalogger", self)
+        if wizard.exec_() == QDialog.Accepted:
+            keys, desc = wizard.get_result()
+            if keys:
+                try:
+                    self.digitizer_response = self.nrl.get_datalogger_response(
+                        keys)
+                    self.digitizer_info = f"From NRL: {desc}"
+                except Exception as e:
+                    QMessageBox.critical(
+                        self, "NRL Error", f"Failed to get datalogger response:\n{e}")
+                    self.digitizer_response = None
+            self._update_ui()
+
+    def select_sensor_from_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Sensor Response File", "", "StationXML (*.xml);;RESP (*.resp);;All Files (*)")
+        if path:
             try:
                 inv = read_inventory(path)
-                self.select_response_from_inventory(inv)
+                self.sensor_response = inv[0][0][0].response
+                self.sensor_info = f"From file: {os.path.basename(path)}"
             except Exception as e:
                 QMessageBox.warning(
                     self, "Error", f"Failed to read file:\n{e}")
+                self.sensor_response = None
+            self._update_ui()
 
-        elif choice == "Select from opened":
-            if not hasattr(
-                    self, "loaded_inventories") or not self.loaded_inventories:
-                QMessageBox.information(
-                    self, "No inventories", "No other inventories are loaded.")
-                return
-            all_inv = Inventory(networks=[], source="merged")
-            for inv in self.loaded_inventories:
-                all_inv.networks.extend(inv.networks)
-            self.select_response_from_inventory(all_inv)
+    def select_digitizer_from_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Digitizer Response File", "", "StationXML (*.xml);;RESP (*.resp);;All Files (*)")
+        if path:
+            try:
+                inv = read_inventory(path)
+                self.digitizer_response = inv[0][0][0].response
+                self.digitizer_info = f"From file: {os.path.basename(path)}"
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Error", f"Failed to read file:\n{e}")
+                self.digitizer_response = None
+            self._update_ui()
 
-        elif choice == "Load from local NRL folder":
-            folder = QFileDialog.getExistingDirectory(
-                self, "Select NRL Folder")
-            if not folder:
-                return
-            dlg = NRLDialog(folder, self)
-            dlg.exec_()
+    def _update_ui(self):
+        self.sensor_status_label.setText(wrap_text(self.sensor_info))
+        self.datalogger_status_label.setText(wrap_text(self.digitizer_info))
 
-            new_resp = dlg.get_response()
-            if new_resp and hasattr(
-                    self, "selected_response") and self.selected_response:
-                self.selected_response.response_stages = copy.deepcopy(
-                    new_resp.response_stages)
-                self.selected_response.instrument_sensitivity = copy.deepcopy(
-                    new_resp.instrument_sensitivity)
+        ok_button = self.button_box.button(QDialogButtonBox.Ok)
+        ok_button.setEnabled(
+            self.sensor_response is not None and self.digitizer_response is not None)
 
-                self.load_response_editor(self.selected_response)
-                self.plot_response(self.selected_response)
-                QMessageBox.information(
-                    self, "Success", "Response loaded from local NRL.")
+    def accept(self):
+        try:
+            print("Sensor:", self.sensor_response)
+            print("Digitizer:", self.digitizer_response)
+            final_response = combine_resp(
+                deepcopy(self.sensor_response),
+                deepcopy(self.digitizer_response)
+            )
+            self.final_resp = final_response
+            print("Final inventory built:", self.final_resp)
+            super().accept()
+        except Exception as e:
+            print("Combine error:", e)
+            QMessageBox.critical(
+                self, "Response Combination Error", f"Could not combine responses:\n{e}")
+            self.final_resp = None
+
+    def get_response(self):
+        return self.final_resp
 
 
-class NRLDialog(QDialog):
-    def __init__(self, nrl_root, parent=None):
+class NRLWizard(QDialog):
+
+    def __init__(self, nrl_root, stage, parent=None):
+
         super().__init__(parent)
-        self.setMinimumWidth(600)
+        self.setWindowTitle(f"NRL {stage.capitalize()} Wizard")
+        self.setMinimumWidth(500)
+        self.setModal(True)
+
         self.nrl_root = nrl_root
-        self.nrl = NRL(root=nrl_root)
-        self.stage = "sensor"
-        self.sensor_path_stack = [os.path.join(nrl_root, "sensor")]
-        self.datalogger_path_stack = [os.path.join(nrl_root, "datalogger")]
-        self.selected_keys = {"sensor": [], "datalogger": []}
-        self.response = None
-        self.in_summary = False
+        self.stage = stage
 
-        self._sensor_xml = None
-        self._sensor_description = ""
-        self._datalogger_xml = None
-        self._datalogger_description = ""
-        self._final_xml_config = None
+        initial_dir = os.path.normpath(os.path.join(self.nrl_root, self.stage))
+        self.path_stack = [(initial_dir, None)]
+
+        self.selected_keys = []
         self.selected_option = None
+        self._final_xml_config = None
+        self.final_description = ""
 
+        self.auto_step_timer = QTimer(self)
+        self.auto_step_timer.setSingleShot(True)
+        self.auto_step_timer.timeout.connect(self.next_step)
+
+        self.back_bool_flag = False
+        self._init_ui()
+        self.load_step()
+
+    def _init_ui(self):
         self.layout = QVBoxLayout(self)
         self.question_label = QLabel("Loading...")
         self.layout.addWidget(self.question_label)
@@ -1162,14 +1299,10 @@ class NRLDialog(QDialog):
         self.layout.addWidget(self.scroll)
 
         button_layout = QHBoxLayout()
-        button_layout.setAlignment(Qt.AlignRight)
-        button_layout.setSpacing(5)
         button_layout.addStretch()
         self.back_btn = QPushButton("Back")
         self.next_btn = QPushButton("Next")
         self.cancel_btn = QPushButton("Cancel")
-        for btn in (self.back_btn, self.next_btn, self.cancel_btn):
-            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         button_layout.addWidget(self.back_btn)
         button_layout.addWidget(self.next_btn)
         button_layout.addWidget(self.cancel_btn)
@@ -1180,242 +1313,170 @@ class NRLDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
 
         self.option_buttons = {}
-        self.load_step()
-
-    def current_path_stack(self):
-        return self.sensor_path_stack if self.stage == "sensor" else self.datalogger_path_stack
 
     def load_step(self):
-        path_stack = self.current_path_stack()
-        current_path = path_stack[-1]
+
+        if self.auto_step_timer.isActive():
+            self.auto_step_timer.stop()
+
         self.clear_layout(self.scroll_layout)
         self.selected_option = None
         self._final_xml_config = None
         self.next_btn.setText("Next")
-        self._disconnect_next()
-        self.next_btn.clicked.connect(self.next_step)
 
-        index_path = os.path.join(current_path, "index.txt") if os.path.isdir(
-            current_path) else current_path
-        if not os.path.isfile(index_path):
+        current_dir, txt_file = self.path_stack[-1]
+        config_filename = txt_file if txt_file else "index.txt"
+        config_path = os.path.join(current_dir, config_filename)
+
+        if not os.path.isfile(config_path):
             QMessageBox.warning(
-                self, "Error", f"Missing index.txt in {index_path}")
+                self, "Error", f"Missing configuration file:\n{config_path}")
+            self.go_back()
             return
 
-        config = configparser.ConfigParser()
-        config.optionxform = str
-        config.read(index_path)
+        config = self._read_config(config_path)
+        if not config:
+            QMessageBox.critical(
+                self, "Read Error", f"Could not read or parse the config file:\n{config_path}")
+            self.go_back()
+            return
 
-        self.question_label.setText(
-            config.get(
-                "Main",
-                "question",
-                fallback="Make a selection"))
+        self.question_label.setText(config.get(
+            "Main", "question", fallback="Make a selection"))
+
         self.option_buttons = {}
-        base_dir = os.path.dirname(index_path)
-        for section in sorted(config.sections(), key=str.lower):
-            if section == "Main":
-                continue
+        base_dir = current_dir
+
+        sections = sorted([s for s in config.sections()
+                          if s != "Main"], key=str.lower)
+        for section in sections:
             raw_path = config.get(
                 section, "path", fallback="").strip().strip('"')
             btn = QRadioButton(wrap_text(section))
             btn.toggled.connect(
-                lambda checked,
-                s=section: self.set_selection(s))
+                lambda checked, s=section: self.set_selection(s))
             self.scroll_layout.addWidget(btn)
-            resolved_path = os.path.join(base_dir, raw_path)
-            self.option_buttons[section] = (btn, resolved_path)
 
-        self.back_btn.setEnabled(
-            len(path_stack) > 1 or self.stage == "datalogger")
+            resolved_path = os.path.normpath(os.path.join(base_dir, raw_path))
+            self.option_buttons[section] = (btn, resolved_path)
+        if not self.back_bool_flag:
+            if len(self.option_buttons) == 1:
+                only_section = next(iter(self.option_buttons))
+                self.option_buttons[only_section][0].setChecked(True)
+                self.auto_step_timer.start(100)
+
+        self.back_btn.setEnabled(len(self.path_stack) > 1)
 
     def load_final_xml_choices(self, config):
+
         self._final_xml_config = config
-        self._at_final_xml_selection = True
         self.selected_option = None
         self.clear_layout(self.scroll_layout)
-        self._disconnect_next()
-        self.next_btn.setText("Finish" if self.stage ==
-                              "datalogger" else "Next")
-        self.next_btn.clicked.connect(self.next_step)
+        self.next_btn.setText("Finish")
 
-        question = config.get(
-            "Main",
-            "question",
-            fallback="Select configuration")
+        question = config.get("Main", "question",
+                              fallback="Select configuration")
         self.question_label.setText(question)
 
         self.option_buttons = {}
-        for section in config.sections():
-            if section == "Main":
-                continue
-            desc = config.get(
-                section,
-                "description",
-                fallback="").strip().strip('"')
+        for section in [s for s in config.sections() if s != "Main"]:
+            desc = config.get(section, "description",
+                              fallback="").strip().strip('"')
             xml = config.get(section, "xml", fallback="").strip().strip('"')
 
             label = f"{section}: {desc}"
-            wrapped_label = wrap_text(label)
-            btn = QRadioButton(wrapped_label)
+            btn = QRadioButton(wrap_text(label))
             btn.toggled.connect(
-                lambda checked,
-                s=section: self.set_selection(s))
+                lambda checked, s=section: self.set_selection(s))
             self.scroll_layout.addWidget(btn)
             self.option_buttons[section] = (btn, xml)
 
     def next_step(self):
+
+        self.back_bool_flag = False
         if not self.selected_option:
             QMessageBox.warning(self, "Selection Required",
                                 "Please select an option.")
             return
 
+        if self._final_xml_config:
+            self.selected_keys.append(self.selected_option)
+            self.final_description = self.option_buttons[self.selected_option][0].text(
+            )
+            self.accept()
+            return
+
         _, next_path = self.option_buttons[self.selected_option]
 
-        if not self.selected_keys[self.stage] or self.selected_keys[self.stage][-1] != self.selected_option:
-            self.selected_keys[self.stage].append(self.selected_option)
+        if os.path.isdir(next_path):
+            self.selected_keys.append(self.selected_option)
+            self.path_stack.append((next_path, None))
+            self.load_step()
+        elif os.path.isfile(next_path) and next_path.endswith(".txt"):
+            config = self._read_config(next_path)
+            if "Main" in config:
+                sections = [s for s in config.sections() if s != "Main"]
 
-        if self._final_xml_config:
-            xml_filename = self.option_buttons[self.selected_option][1]
-            description = self.option_buttons[self.selected_option][0].text()
+                is_final = all(config.has_option(s, "xml") for s in sections)
+                is_intermediate = all(config.has_option(s, "path")
+                                      for s in sections)
 
-            if self.stage == "sensor":
-                self._sensor_xml = xml_filename
-                self._sensor_description = description
-                self.stage = "datalogger"
-                self.selected_option = None
-                self._final_xml_config = None
-                self.load_step()
+                self.selected_keys.append(self.selected_option)
+                self.path_stack.append(
+                    (os.path.dirname(next_path), os.path.basename(next_path)))
+
+                if is_final:
+                    self.load_final_xml_choices(config)
+                elif is_intermediate:
+                    self.load_step()
+                else:
+                    QMessageBox.warning(
+                        self, "NRL Error", f"Invalid config file format:\n{next_path}")
+                    self.go_back()
             else:
-                self._datalogger_xml = xml_filename
-                self._datalogger_description = description
-                self.show_summary()
-            return
+                QMessageBox.warning(
+                    self, "NRL Error", f"Invalid config file format:\n{next_path}")
+                self.go_back()
+        else:
+            QMessageBox.warning(self, "NRL Error",
+                                f"Unrecognized or invalid path:\n{next_path}")
+
+    def go_back(self):
+        self.back_bool_flag = True
+        if len(self.path_stack) > 1:
+            self.path_stack.pop()
+            if self.selected_keys:
+                self.selected_keys.pop()
+            self.load_step()
+
+    def set_selection(self, section):
+
+        if section in self.option_buttons and self.option_buttons[section][0].isChecked():
+            self.selected_option = section
+
+    def get_result(self):
+
+        if self.result() == QDialog.Accepted:
+            return self.selected_keys, self.final_description
+        return None, None
+
+    def _read_config(self, path):
 
         config = configparser.ConfigParser()
         config.optionxform = str
-
-        if os.path.isfile(next_path) and next_path.endswith(".txt"):
-            config.read(next_path)
-            if "Main" in config:
-                sections = [s for s in config.sections() if s != "Main"]
-                if all(config.has_option(s, "xml") and config.has_option(
-                        s, "description") for s in sections):
-                    self._final_xml_config = config
-                    self.current_path_stack().append(next_path)
-                    self.load_final_xml_choices(config)
-                    return
-                elif all(config.has_option(s, "path") for s in sections):
-                    self.current_path_stack().append(next_path)
-                    self.load_step()
-                    return
-
-        elif os.path.isdir(next_path):
-            self.current_path_stack().append(next_path)
-            self.load_step()
-            return
-
-        QMessageBox.warning(
-            self,
-            "NRL Error",
-            f"Unrecognized path:\n{next_path}")
-
-    def go_back(self):
-        if self.in_summary:
-            self.in_summary = False
-            self.stage = "datalogger"
-            self.selected_option = None
-            if self.selected_keys["datalogger"]:
-                self.selected_keys["datalogger"].pop()
-            self._at_final_xml_selection = True
-            self.selected_option = None
-            self._disconnect_next()
-            self.next_btn.setText("Finish")
-            self.next_btn.clicked.connect(self.next_step)
-            self.load_final_xml_choices(self._final_xml_config)
-            return
-
-        if getattr(self, "_at_final_xml_selection", False):
-            self._at_final_xml_selection = False
-            path_stack = self.current_path_stack()
-            if len(path_stack) > 1:
-                path_stack.pop()
-            if self.selected_keys[self.stage]:
-                self.selected_keys[self.stage].pop()
-            self.selected_option = None
-            self._final_xml_config = None
-            self.load_step()
-            return
-
-        path_stack = self.current_path_stack()
-        if len(path_stack) > 1:
-            path_stack.pop()
-            if self.selected_keys[self.stage]:
-                self.selected_keys[self.stage].pop()
-            self.selected_option = None
-            self._final_xml_config = None
-            self.load_step()
-        elif self.stage == "datalogger":
-            self.stage = "sensor"
-            self.selected_option = None
-            self._final_xml_config = None
-            self.load_step()
-
-    def show_summary(self):
-        self.in_summary = True
-        self.clear_layout(self.scroll_layout)
-        self.question_label.setText("Review your selections and confirm:")
-
-        summary_text = (
-            "<b>Sensor Selection:</b><br>"
-            + "<br>".join(self.selected_keys["sensor"])
-            + f"<br><i>{self._sensor_description}</i><br><br>"
-            + "<b>Datalogger Selection:</b><br>"
-            + "<br>".join(self.selected_keys["datalogger"])
-            + f"<br><i>{self._datalogger_description}</i>"
-        )
-
-        label = QLabel(summary_text)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.scroll_layout.addWidget(label)
-
-        self.next_btn.setText("Finish")
-        self._disconnect_next()
-        self.next_btn.clicked.connect(self.finalize_response)
-
-    def finalize_response(self):
         try:
-            self.response = self.nrl.get_response(
-                sensor_keys=self.selected_keys["sensor"],
-                datalogger_keys=self.selected_keys["datalogger"],
-            )
-            self.accept()
+            config.read(path, encoding='utf-8-sig')
+            return config
         except Exception as e:
-            QMessageBox.critical(
-                self, "NRL Error", f"Failed to generate response:\n{e}")
+            print(f"Error reading config file {path}: {e}")
+            return None
 
     def clear_layout(self, layout):
+
         while layout.count():
             child = layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-
-    def set_selection(self, section):
-        if self.option_buttons[section][0].isChecked():
-            self.selected_option = section
-
-    def _disconnect_next(self):
-        try:
-            self.next_btn.clicked.disconnect()
-        except Exception:
-            pass
-
-    def get_response(self):
-        return self.nrl.get_response(
-            sensor_keys=self.selected_keys["sensor"],
-            datalogger_keys=self.selected_keys["datalogger"]
-        )
 
 
 def wrap_text(text, max_len=75):
@@ -1437,3 +1498,9 @@ def wrap_text(text, max_len=75):
 
     lines.append(text)
     return "\n".join(lines)
+
+
+def resource_path(relative_path):
+
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
