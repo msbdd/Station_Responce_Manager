@@ -20,7 +20,11 @@ from matplotlib.figure import Figure
 from obspy.signal.invsim import evalresp
 from obspy import Inventory
 from obspy.core.inventory.response import Response
-
+from obspy.core.inventory.response import (
+    ResponseStage, PolesZerosResponseStage, CoefficientsTypeResponseStage,
+    ResponseListResponseStage, FIRResponseStage, PolynomialResponseStage,
+    ResponseListElement
+)
 import numpy as np
 from obspy import read_inventory
 from obspy.core.inventory import Station, Network, Channel
@@ -56,7 +60,7 @@ class MainWindow(QMainWindow):
     def setup_menu(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
-        new_inventory = QAction("New Inventory...", self)
+        new_inventory = QAction("New Inventory", self)
         new_inventory.triggered.connect(self.create_new_inventory)
         file_menu.addAction(new_inventory)
         add_data = QAction("Add Data", self)
@@ -68,6 +72,13 @@ class MainWindow(QMainWindow):
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        tools_menu = menubar.addMenu("Tools")
+        build_inventory = QAction("Build Inventory", self)
+        build_inventory.triggered.connect(self.build_new_inventory)
+        tools_menu.addAction(build_inventory)
+        convert_to_xml = QAction("Convert to XML", self)
+        convert_to_xml.triggered.connect(self.convert_to_xml)
+        tools_menu.addAction(convert_to_xml)
 
     def setup_ui(self):
         self.tabs = QTabWidget()
@@ -163,6 +174,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(
                 self, "Error", f"Failed to create inventory:\n{e}")
+
+    def build_new_inventory(self):
+        pass
+
+    def convert_to_xml(self):
+        pass
 
 
 class ManagerTab(QWidget):
@@ -839,14 +856,23 @@ class ResponseTab(QWidget):
 
         self.populate_stage_tree(response)
         left_layout.addWidget(self.stage_tree)
+        btn_layout = QHBoxLayout()
+        add_stage = QPushButton("New")
+        add_stage.clicked.connect(self.new)
+        btn_layout.addWidget(add_stage)
+
+        delete_stage = QPushButton("Delete")
+        delete_stage.clicked.connect(self.delete)
+        btn_layout.addWidget(delete_stage)
 
         replace_button = QPushButton("Replace Response")
-        left_layout.addWidget(replace_button)
         replace_button.clicked.connect(self.replace_response)
+        btn_layout.addWidget(replace_button)
 
         save_btn = QPushButton("Save Response")
         save_btn.clicked.connect(self.save_edited_response)
-        left_layout.addWidget(save_btn)
+        btn_layout.addWidget(save_btn)
+        left_layout.addLayout(btn_layout)
         splitter.addWidget(left_widget)
 
         self.canvas = MplCanvas(self)
@@ -1108,6 +1134,287 @@ class ResponseTab(QWidget):
             self.plot_response(self.selected_response)
             QMessageBox.information(
                 self, "Success", "Response loaded from local NRL.")
+
+    def new(self):
+        item = self.stage_tree.currentItem()
+        if not item:
+            QMessageBox.warning(self, "No Selection",
+                                "Select an item to add a new field under.")
+            return
+
+        ref = item.data(0, Qt.UserRole)
+
+        if isinstance(ref, tuple):
+            ref_type = ref[0]
+
+            if ref_type == "zero":
+                stage = ref[1]
+                stage.zeros.append(complex(0.0, 0.0))
+                self.load_response_editor(self.selected_response)
+                return
+
+            elif ref_type == "pole":
+                stage = ref[1]
+                stage.poles.append(complex(0.0, 0.0))
+                self.load_response_editor(self.selected_response)
+                return
+
+        #  New Stage
+        is_stage_node = item.text(0).startswith(
+            "Stage") or item == self.stage_tree.invisibleRootItem()
+
+        if is_stage_node:
+
+            possible_stages = (
+                "Response Stage", "Poles Zeros Response Stage",
+                "Coefficients Type Response Stage", "Response List Response Stage",
+                "FIR Response Stage", "Polynomial Response Stage",
+            )
+            stage_type, ok = QInputDialog.getItem(
+                self, "Select Stage Type", "Stage type:", possible_stages, 0, False)
+            if not ok:
+                return
+
+            stage_builders = {
+                "Response Stage": self._build_response_stage,
+                "Poles Zeros Response Stage": self._build_poles_zeros_stage,
+                "Coefficients Type Response Stage": self._build_coefficients_type_stage,
+                "Response List Response Stage": self._build_response_list_stage,
+                "FIR Response Stage": self._build_fir_stage,
+                "Polynomial Response Stage": self._build_polynomial_stage,
+            }
+
+            builder_func = stage_builders.get(stage_type)
+            if not builder_func:
+                return
+
+            new_stage = builder_func()
+
+            if new_stage:
+                self.selected_response.response_stages.append(new_stage)
+                self.load_response_editor(self.selected_response)
+                return
+
+        QMessageBox.warning(self, "Unsupported Selection",
+                            "You can't create a new item under this element.")
+
+    def _get_common_stage_parameters(self):
+        stage_gain, ok1 = QInputDialog.getDouble(
+            self, "Stage Gain", "Enter stage gain:", value=1.0)
+        if not ok1:
+            return None
+
+        stage_gain_freq, ok2 = QInputDialog.getDouble(
+            self, "Stage Gain Frequency", "Enter gain frequency (Hz):", value=1.0)
+        if not ok2:
+            return None
+
+        input_units, ok3 = QInputDialog.getText(
+            self, "Input Units", "Enter input units:", text="M/S")
+        if not ok3:
+            return None
+
+        output_units, ok4 = QInputDialog.getText(
+            self, "Output Units", "Enter output units:", text="V")
+        if not ok4:
+            return None
+
+        return {
+            "stage_gain": stage_gain,
+            "stage_gain_frequency": stage_gain_freq,
+            "input_units": input_units,
+            "output_units": output_units
+        }
+
+    def _build_response_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        return ResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            **common_params
+        )
+
+    def _build_poles_zeros_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        possible_tf_types = ("LAPLACE (RADIANS/SECOND)",
+                             "LAPLACE (HERTZ)", "DIGITAL (Z-TRANSFORM)")
+        pz_type, ok1 = QInputDialog.getItem(
+            self, "Transfer Function Type", "Select type:", possible_tf_types, 0, False)
+        if not ok1:
+            return None
+
+        norm_freq, ok2 = QInputDialog.getDouble(
+            self, "Normalization Frequency", "Enter normalization frequency (Hz):", value=1.0)
+        if not ok2:
+            return None
+
+        return PolesZerosResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            normalization_frequency=norm_freq,
+            pz_transfer_function_type=pz_type,
+            zeros=[0.0 + 0.0j],
+            poles=[0.0 + 0.0j],
+            **common_params
+        )
+
+    def _build_coefficients_type_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        possible_tf_types = ("DIGITAL", "ANALOG")
+        cf_type, ok = QInputDialog.getItem(
+            self, "Transfer Function Type", "Select type:", possible_tf_types, 0, False)
+        if not ok:
+            return None
+
+        return CoefficientsTypeResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            cf_transfer_function_type=cf_type,
+            numerator=[1.0],
+            denominator=[],
+            **common_params
+        )
+
+    def _build_response_list_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        default_element = ResponseListElement(
+            frequency=1.0, amplitude=1.0, phase=0.0)
+
+        return ResponseListResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            response_list_elements=[default_element],
+            **common_params
+        )
+
+    def _build_fir_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        symmetry_options = ("NONE", "ODD", "EVEN")
+        symmetry, ok = QInputDialog.getItem(
+            self, "Symmetry", "Select FIR symmetry:", symmetry_options, 0, False)
+        if not ok:
+            return None
+
+        return FIRResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            symmetry=symmetry,
+            coefficients=[1.0],  # Add default coefficient
+            **common_params
+        )
+
+    def _build_polynomial_stage(self):
+        common_params = self._get_common_stage_parameters()
+        if not common_params:
+            return None
+
+        approx_types = ("MACLAURIN", "CHEBYSHEV")
+        approx_type, ok1 = QInputDialog.getItem(
+            self, "Approximation Type", "Select type:", approx_types, 0, False)
+        if not ok1:
+            return None
+
+        freq_lower, ok2 = QInputDialog.getDouble(
+            self, "Frequency Lower Bound", "Enter frequency lower bound (Hz):", value=0.0)
+        if not ok2:
+            return None
+
+        freq_upper, ok3 = QInputDialog.getDouble(
+            self, "Frequency Upper Bound", "Enter frequency upper bound (Hz):", value=100.0)
+        if not ok3:
+            return None
+
+        approx_lower, ok4 = QInputDialog.getDouble(
+            self, "Approximation Lower Bound", "Enter approximation lower bound:", value=0.0)
+        if not ok4:
+            return None
+
+        approx_upper, ok5 = QInputDialog.getDouble(
+            self, "Approximation Upper Bound", "Enter approximation upper bound:", value=1.0)
+        if not ok5:
+            return None
+
+        max_error, ok6 = QInputDialog.getDouble(
+            self, "Maximum Error", "Enter maximum error:", value=0.0)
+        if not ok6:
+            return None
+
+        return PolynomialResponseStage(
+            stage_sequence_number=len(
+                self.selected_response.response_stages) + 1,
+            approximation_type=approx_type,
+            frequency_lower_bound=freq_lower,
+            frequency_upper_bound=freq_upper,
+            approximation_lower_bound=approx_lower,
+            approximation_upper_bound=approx_upper,
+            maximum_error=max_error,
+            coefficients=[1.0],
+            **common_params
+        )
+
+    def delete(self):
+        item = self.stage_tree.currentItem()
+        if not item:
+            QMessageBox.warning(self, "No Selection",
+                                "Select a field to delete.")
+            return
+
+        ref = item.data(0, Qt.UserRole)
+        if not ref:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete", "Are you sure you want to delete this field?",
+            QMessageBox.Yes | QMessageBox.No)
+
+        if reply != QMessageBox.Yes:
+            return
+
+        if isinstance(ref, tuple):
+            if len(ref) == 3:
+                ref_type, stage, index = ref
+                if ref_type == "pole":
+                    del stage.poles[index]
+                    self.load_response_editor(self.selected_response)
+                    return
+                elif ref_type == "zero":
+                    del stage.zeros[index]
+                    self.load_response_editor(self.selected_response)
+                    return
+
+            elif len(ref) == 2:
+                ref_object, attr = ref
+                try:
+                    setattr(ref_object, attr, None)
+                    self.load_response_editor(self.selected_response)
+                    return
+                except Exception as e:
+                    QMessageBox.warning(
+                        self, "Error", f"Could not delete attribute: {e}")
+                    return
+
+        parent = item.parent()
+        if parent is None:
+            idx = self.stage_tree.indexOfTopLevelItem(item)
+            if idx >= 0 and idx < len(self.selected_response.response_stages):
+                del self.selected_response.response_stages[idx]
+                self.load_response_editor(self.selected_response)
+                return
 
 
 class ResponseSelectionDialog(QDialog):
