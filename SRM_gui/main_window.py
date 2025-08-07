@@ -3,22 +3,22 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QPushButton,
     QFileDialog, QLabel, QTreeWidget, QTreeWidgetItem, QTabWidget, QMessageBox,
     QSplitter, QDialog, QDialogButtonBox, QLineEdit, QComboBox,
-    QInputDialog, QGroupBox, QRadioButton,
-    QScrollArea, QHBoxLayout, QFormLayout, QAction,
-    QTabBar
+    QInputDialog, QGroupBox, QRadioButton, QDoubleSpinBox,
+    QScrollArea, QHBoxLayout, QFormLayout, QAction, QDateTimeEdit,
+    QTabBar,
 )
 from copy import deepcopy
-
+from collections import OrderedDict
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QColor, QFont, QBrush
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QDateTime
 from SRM_core.utils import parse_response, combine_resp
 import os
 import sys
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from obspy.signal.invsim import evalresp
-from obspy import Inventory
+from obspy import Inventory, UTCDateTime, read
 from obspy.core.inventory.response import Response
 from obspy.core.inventory.response import (
     ResponseStage, PolesZerosResponseStage, CoefficientsTypeResponseStage,
@@ -176,7 +176,42 @@ class MainWindow(QMainWindow):
                 self, "Error", f"Failed to create inventory:\n{e}")
 
     def build_new_inventory(self):
-        pass
+
+        reply = QMessageBox.question(
+            self,
+            'New Inventory Source',
+            'Do you want to provide a MiniSEED file to pre-fill the form?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+
+        try:
+            nrl_folder = resource_path(os.path.join("resources", "NRL"))
+            if not os.path.isdir(nrl_folder):
+                QMessageBox.critical(
+                    self, "Error", f"NRL path not found:\n{nrl_folder}")
+                return
+        except NameError:
+            QMessageBox.critical(
+                self, "Error", "The 'resource_path' function is not defined.")
+            return
+
+        if reply == QMessageBox.No:
+
+            inv_wizard = StationInventoryWizard(nrl_folder, parent=self)
+            if inv_wizard.exec_() == QDialog.Accepted:
+                print("Inventory creation successful!")
+
+        elif reply == QMessageBox.Yes:
+
+            import_dialog = ImportFromMiniSEEDDialog(parent=self)
+
+            if import_dialog.exec_() == QDialog.Accepted:
+                initial_data = import_dialog.get_initial_data()
+
+                inv_wizard = StationInventoryWizard(
+                    nrl_folder, initial_data=initial_data, parent=self)
+                if inv_wizard.exec_() == QDialog.Accepted:
+                    print("Inventory creation from MiniSEED successful!")
 
     def convert_to_xml(self):
         pass
@@ -1562,7 +1597,7 @@ class ResponseSelectionDialog(QDialog):
             self.final_resp = None
 
     def get_response(self):
-        return self.final_resp
+        return self.final_resp, self.sensor_info, self.digitizer_info
 
 
 class NRLWizard(QDialog):
@@ -1784,6 +1819,226 @@ class NRLWizard(QDialog):
             child = layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+
+class StationInventoryWizard(QDialog):
+    def __init__(self, nrl_root, initial_data=None, parent=None):
+        super().__init__(parent)
+        self.nrl_root = nrl_root
+        self.setWindowTitle("Station Inventory Creation Wizard")
+        self.setMinimumWidth(700)
+        self.inventory = None
+        self.response1 = None
+        self.response1_info = "Not Selected"
+        self._init_ui()
+        if initial_data:
+            self._populate_from_initial_data(initial_data)
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        station_group = QGroupBox("Station Parameters")
+        station_layout = QFormLayout()
+        self.net_edit = QLineEdit("XX")
+        self.sta_edit = QLineEdit("STA")
+        self.lat_spin = QDoubleSpinBox()
+        self.lat_spin.setRange(-90.0, 90.0)
+        self.lat_spin.setDecimals(6)
+        self.lon_spin = QDoubleSpinBox()
+        self.lon_spin.setRange(-180.0, 180.0)
+        self.lon_spin.setDecimals(6)
+        self.ele_spin = QDoubleSpinBox()
+        self.ele_spin.setRange(-1000, 9000)
+        self.ele_spin.setDecimals(1)
+        self.start_date_edit = QDateTimeEdit(QDateTime.currentDateTimeUtc())
+        self.start_date_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        station_layout.addRow("Network Code:", self.net_edit)
+        station_layout.addRow("Station Code:", self.sta_edit)
+        station_layout.addRow("Latitude:", self.lat_spin)
+        station_layout.addRow("Longitude:", self.lon_spin)
+        station_layout.addRow("Elevation (m):", self.ele_spin)
+        station_layout.addRow("Start Date:", self.start_date_edit)
+        station_group.setLayout(station_layout)
+        main_layout.addWidget(station_group)
+        channel_group = QGroupBox("Channel Setup")
+        channel_layout = QFormLayout()
+        self.loc_edit = QLineEdit("00")
+        self.chan_base_edit = QLineEdit("HH")
+        self.chan_components_edit = QLineEdit("Z,N,E")
+        self.chan_components_edit.setToolTip(
+            "Comma-separated channel endings (e.g., Z,N,E or 1,2,Z)")
+        channel_layout.addRow("Location Code:", self.loc_edit)
+        channel_layout.addRow("Channel Base Code:", self.chan_base_edit)
+        channel_layout.addRow("Channel Components:", self.chan_components_edit)
+        channel_group.setLayout(channel_layout)
+        main_layout.addWidget(channel_group)
+
+        self.response_group1 = QGroupBox("Instrument Response")
+        resp1_layout = QHBoxLayout()
+        self.resp1_label = QLabel(self.response1_info)
+        self.resp1_btn = QPushButton("Select...")
+        self.resp1_btn.clicked.connect(self._select_response)
+        resp1_layout.addWidget(self.resp1_label)
+        resp1_layout.addWidget(self.resp1_btn)
+        self.response_group1.setLayout(resp1_layout)
+        main_layout.addWidget(self.response_group1)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        main_layout.addWidget(self.button_box)
+
+    def _populate_from_initial_data(self, data):
+        """Pre-fills the form with data from MiniSEED import."""
+        self.net_edit.setText(data.get("net", ""))
+        self.sta_edit.setText(data.get("sta", ""))
+        self.loc_edit.setText(data.get("loc", ""))
+        self.chan_base_edit.setText(data.get("chan_base", ""))
+        self.chan_components_edit.setText(",".join(data.get("components", [])))
+
+    def _select_response(self):
+        dialog = ResponseSelectionDialog(self.nrl_root, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.response1, s_info, d_info = dialog.get_response()
+            if self.response1:
+                self.response1_info = f"Sensor: {s_info} | Datalogger: {d_info}"
+                self.resp1_label.setText(wrap_text(self.response1_info))
+
+    def accept(self):
+        if not self._validate_inputs():
+            return
+        try:
+            self._build_inventory()
+            default_filename = f"{self.inventory[0].code}.{self.inventory[0][0].code}.xml"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "Save Inventory File", default_filename, "StationXML (*.xml)")
+            if save_path:
+                self.inventory.write(save_path, format="STATIONXML")
+                QMessageBox.information(
+                    self, "Success", f"Inventory saved to:\n{save_path}")
+                super().accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Build Error",
+                                 f"Failed to build or save inventory:\n{e}")
+
+    def _validate_inputs(self):
+        if not all([self.net_edit.text(), self.sta_edit.text(), self.chan_base_edit.text(), self.chan_components_edit.text()]):
+            QMessageBox.warning(
+                self, "Input Error", "All station and channel code fields are required.")
+            return False
+        if not self.response1:
+            QMessageBox.warning(self, "Input Error",
+                                "An instrument response must be selected.")
+            return False
+        return True
+
+    def _build_inventory(self):
+        net_code, sta_code, loc_code = self.net_edit.text().upper(
+        ), self.sta_edit.text().upper(), self.loc_edit.text().upper()
+        lat, lon, ele = self.lat_spin.value(), self.lon_spin.value(), self.ele_spin.value()
+        start_date = UTCDateTime(
+            self.start_date_edit.dateTime().toPyDateTime())
+        base = self.chan_base_edit.text().upper()
+        components = [c.strip().upper()
+                      for c in self.chan_components_edit.text().split(',')]
+
+        channels = []
+        for comp in components:
+            code = base + comp
+            az, dip = 0, 0  # Default orientation
+            if comp.endswith('E'):
+                az, dip = 90, 0
+            elif comp.endswith('N'):
+                az, dip = 0, 0
+            elif comp.endswith('Z'):
+                az, dip = 0, -90
+
+            channels.append(Channel(
+                code=code, location_code=loc_code, latitude=lat, longitude=lon, elevation=ele,
+                depth=0, azimuth=az, dip=dip, sample_rate=self.response1.instrument_sensitivity.frequency,
+                start_date=start_date, response=self.response1
+            ))
+
+        station = Station(code=sta_code, latitude=lat, longitude=lon,
+                          elevation=ele, creation_date=start_date, channels=channels)
+        network = Network(code=net_code, stations=[station])
+        self.inventory = Inventory(
+            networks=[network], source="StationInventoryWizard")
+
+
+class ImportFromMiniSEEDDialog(QDialog):
+    """A dialog to select a MiniSEED file and extract metadata."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Import from MiniSEED")
+        self.setMinimumWidth(400)
+        self.filepath = ""
+        self.initial_data = {}
+
+        layout = QFormLayout(self)
+        self.path_edit = QLineEdit()
+        self.path_edit.setReadOnly(True)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browse_file)
+        layout.addRow("MiniSEED File:", self.path_edit)
+        layout.addRow("", browse_btn)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addRow(button_box)
+
+    def browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select MiniSEED File", "", "MiniSEED files (*.mseed *.ms)")
+        if path:
+            self.filepath = path
+            self.path_edit.setText(path)
+
+    def accept(self):
+        if not self.filepath:
+            QMessageBox.warning(
+                self, "No File", "Please select a MiniSEED file.")
+            return
+        try:
+            stream = read(self.filepath, headonly=False)
+            if not stream:
+                QMessageBox.warning(
+                    self, "Empty File", "The selected file contains no data traces.")
+                return
+            for tr in stream:
+                if len(tr) == 0:
+                    stream.remove(tr)
+            components = OrderedDict()
+            first_trace = stream[0]
+            net = first_trace.stats.network
+            sta = first_trace.stats.station
+            loc = first_trace.stats.location
+
+            chan_codes = sorted(list(set(tr.stats.channel for tr in stream)))
+            if len(chan_codes[0]) > 1:
+                base = os.path.commonprefix(chan_codes)
+                if len(base) > 0:
+                    comps = [ch.replace(base, '', 1) for ch in chan_codes]
+                else:
+                    base = ""
+                    comps = chan_codes
+            else:
+                base = ""
+                comps = chan_codes
+
+            self.initial_data = {"net": net, "sta": sta,
+                                 "loc": loc, "chan_base": base, "components": comps}
+            super().accept()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Read Error",
+                                 f"Could not read or parse the file:\n{e}")
+
+    def get_initial_data(self):
+        return self.initial_data
 
 
 def wrap_text(text, max_len=75):
