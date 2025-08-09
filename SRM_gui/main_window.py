@@ -1,29 +1,51 @@
-# gui/main_window.py
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QFileDialog, QLabel, QTreeWidget, QTreeWidgetItem, QTabWidget, QMessageBox,
-    QSplitter, QDialog, QDialogButtonBox, QLineEdit, QComboBox,
-    QInputDialog, QGroupBox, QRadioButton, QDoubleSpinBox,
-    QScrollArea, QHBoxLayout, QFormLayout, QAction, QDateTimeEdit,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QPushButton,
+    QFileDialog,
+    QLabel,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QTabWidget,
+    QMessageBox,
+    QSplitter,
+    QDialog,
+    QDialogButtonBox,
+    QLineEdit,
+    QComboBox,
+    QInputDialog,
+    QGroupBox,
+    QRadioButton,
+    QCheckBox,
+    QScrollArea,
+    QHBoxLayout,
+    QFormLayout,
+    QAction,
+    QDateTimeEdit,
     QTabBar,
 )
 from copy import deepcopy
-from collections import OrderedDict
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QColor, QFont, QBrush
 from PyQt5.QtCore import Qt, QTimer, QDateTime
-from SRM_core.utils import parse_response, combine_resp
+from SRM_core.utils import combine_resp, resource_path, wrap_text
 import os
 import sys
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg as FigureCanvas,
+)
 from matplotlib.figure import Figure
-from obspy.signal.invsim import evalresp
 from obspy import Inventory, UTCDateTime, read
 from obspy.core.inventory.response import Response
 from obspy.core.inventory.response import (
-    ResponseStage, PolesZerosResponseStage, CoefficientsTypeResponseStage,
-    ResponseListResponseStage, FIRResponseStage, PolynomialResponseStage,
-    ResponseListElement
+    ResponseStage,
+    PolesZerosResponseStage,
+    CoefficientsTypeResponseStage,
+    ResponseListResponseStage,
+    FIRResponseStage,
+    PolynomialResponseStage,
+    ResponseListElement,
 )
 import numpy as np
 from obspy import read_inventory
@@ -51,8 +73,38 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Seismic Inventory Manager")
         self.resize(1200, 700)
 
-        self.loaded_files = {}   # { filepath: Inventory }
-        self.open_tabs = {}      # { (type, id): QWidget }
+        self.loaded_files = {}
+        self.open_tabs = {}
+
+        self.nrl_root = resource_path(os.path.join("resources", "NRL"))
+        while True:
+            try:
+                self.nrl = NRL(root=self.nrl_root)
+                break
+            except Exception:
+                reply = QMessageBox.question(
+                    self,
+                    "NRL Not Found",
+                    "NRL folder not detected at:\n"
+                    f"{self.nrl_root}\n\nWould you like to select the NRL"
+                    f"folder manually?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply == QMessageBox.Yes:
+                    folder = QFileDialog.getExistingDirectory(
+                        self, "Select NRL Folder", os.path.expanduser("~")
+                    )
+                    if folder:
+                        self.nrl_root = folder
+                        continue
+                QMessageBox.critical(
+                    self,
+                    "NRL Required",
+                    "NRL folder is required to run this application."
+                    "\nExiting.",
+                )
+                sys.exit(1)
 
         self.setup_menu()
         self.setup_ui()
@@ -96,16 +148,20 @@ class MainWindow(QMainWindow):
             try:
                 inv.write(filepath, format="STATIONXML")
                 for (tab_type, tab_id), widget in self.open_tabs.items():
-                    if tab_type == "explorer" and isinstance(widget, ExplorerTab):
+                    if tab_type == "explorer" and isinstance(
+                        widget, ExplorerTab
+                    ):
                         inv = self.loaded_files.get(tab_id)
                         if inv:
                             widget.populate_tree(inv)
                 self.manager_tab.refresh()
             except Exception as e:
                 QMessageBox.warning(
-                    self, "Error", f"Failed to save {filepath}:\n{e}")
-        QMessageBox.information(self, "Save Complete",
-                                "All inventories saved successfully.")
+                    self, "Error", f"Failed to save {filepath}:\n{e}"
+                )
+        QMessageBox.information(
+            self, "Save Complete", "All inventories saved successfully."
+        )
 
     def add_data(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Data Folder")
@@ -122,7 +178,8 @@ class MainWindow(QMainWindow):
                     self.manager_tab.add_file_to_tree(abs_path, inv)
                 except Exception as e:
                     QMessageBox.warning(
-                        self, "Error", f"Failed to load {file}:\n{e}")
+                        self, "Error", f"Failed to load {file}:\n{e}"
+                    )
 
     def open_explorer_tab(self, filepath, inventory):
         key = ("explorer", filepath)
@@ -130,7 +187,8 @@ class MainWindow(QMainWindow):
             explorer = ExplorerTab(filepath=filepath, main_window=self)
             explorer.populate_tree(inventory)
             index = self.tabs.addTab(
-                explorer, f"Explorer - {os.path.basename(filepath)}")
+                explorer, f"Explorer - {os.path.basename(filepath)}"
+            )
             self.open_tabs[key] = explorer
             self.tabs.setCurrentIndex(index)
         else:
@@ -140,8 +198,12 @@ class MainWindow(QMainWindow):
     def open_response_tab(self, response_id, response_data, explorer_tab):
         key = ("response", response_id)
         if key not in self.open_tabs:
-            response_tab = ResponseTab(response_data, self, explorer_tab)
-            index = self.tabs.addTab(response_tab, f"Response - {response_id}")
+            response_tab = ResponseTab(
+                response_data, self, explorer_tab, self.nrl_root
+            )
+            index = self.tabs.addTab(
+                response_tab, f"Response - {response_id}"
+            )
             self.open_tabs[key] = response_tab
             self.tabs.setCurrentIndex(index)
         else:
@@ -160,7 +222,10 @@ class MainWindow(QMainWindow):
 
     def create_new_inventory(self):
         filepath, _ = QFileDialog.getSaveFileName(
-            self, "Create New Inventory", "", "StationXML Files (*.xml);;All Files (*)"
+            self,
+            "Create New Inventory",
+            "",
+            "StationXML Files (*.xml);;All Files (*)",
         )
         if not filepath:
             return
@@ -173,31 +238,22 @@ class MainWindow(QMainWindow):
             self.open_explorer_tab(filepath, inv)
         except Exception as e:
             QMessageBox.warning(
-                self, "Error", f"Failed to create inventory:\n{e}")
+                self, "Error", f"Failed to create inventory:\n{e}"
+            )
 
     def build_new_inventory(self):
 
         reply = QMessageBox.question(
             self,
-            'New Inventory Source',
-            'Do you want to provide a MiniSEED file to pre-fill the form?',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            "New Inventory Source",
+            "Do you want to provide a MiniSEED file to pre-fill the form?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
-
-        try:
-            nrl_folder = resource_path(os.path.join("resources", "NRL"))
-            if not os.path.isdir(nrl_folder):
-                QMessageBox.critical(
-                    self, "Error", f"NRL path not found:\n{nrl_folder}")
-                return
-        except NameError:
-            QMessageBox.critical(
-                self, "Error", "The 'resource_path' function is not defined.")
-            return
 
         if reply == QMessageBox.No:
 
-            inv_wizard = StationInventoryWizard(nrl_folder, parent=self)
+            inv_wizard = StationInventoryWizard(self.nrl_root, parent=self)
             if inv_wizard.exec_() == QDialog.Accepted:
                 print("Inventory creation successful!")
 
@@ -209,7 +265,8 @@ class MainWindow(QMainWindow):
                 initial_data = import_dialog.get_initial_data()
 
                 inv_wizard = StationInventoryWizard(
-                    nrl_folder, initial_data=initial_data, parent=self)
+                    self.nrl_root, initial_data=initial_data, parent=self
+                )
                 if inv_wizard.exec_() == QDialog.Accepted:
                     print("Inventory creation from MiniSEED successful!")
 
@@ -230,10 +287,13 @@ class ManagerTab(QWidget):
         self.network_colors = {}
         self.file_tree = QTreeWidget()
         self.file_tree.setHeaderLabels(["Loaded Inventories"])
-        self.file_tree.itemDoubleClicked.connect(self.handle_item_double_click)
+        self.file_tree.itemDoubleClicked.connect(
+            self.handle_item_double_click
+        )
         left_layout.addWidget(self.file_tree)
         self.file_tree.itemSelectionChanged.connect(
-            self.handle_selection_changed)
+            self.handle_selection_changed
+        )
         btn_layout = QHBoxLayout()
         new_btn = QPushButton("New")
         new_btn.clicked.connect(self.new_item)
@@ -271,8 +331,9 @@ class ManagerTab(QWidget):
             existing = len(self.network_colors)
             hue = (existing * 0.618033988749895) % 1
             r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.95)
-            hex_color = '#{:02x}{:02x}{:02x}'.format(
-                int(r*255), int(g*255), int(b*255))
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(r * 255), int(g * 255), int(b * 255)
+            )
             self.network_colors[network_name] = hex_color
         return self.network_colors[network_name]
 
@@ -280,8 +341,9 @@ class ManagerTab(QWidget):
         file_item = QTreeWidgetItem([os.path.basename(abs_filepath)])
         file_item.setData(0, Qt.UserRole, ("file", abs_filepath))
         file_item.setExpanded(True)
-        file_item.setFlags(file_item.flags() |
-                           Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+        file_item.setFlags(
+            file_item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled
+        )
         self.file_tree.addTopLevelItem(file_item)
 
         for net in inventory.networks:
@@ -304,13 +366,15 @@ class ManagerTab(QWidget):
         for net in inventory.networks:
             color = self.get_color_for_network(net.code)
             for sta in net.stations:
-                self.all_stations.append({
-                    "name": f"{net.code}.{sta.code}",
-                    "lat": sta.latitude,
-                    "lon": sta.longitude,
-                    "network": net.code,
-                    "color": color
-                })
+                self.all_stations.append(
+                    {
+                        "name": f"{net.code}.{sta.code}",
+                        "lat": sta.latitude,
+                        "lon": sta.longitude,
+                        "network": net.code,
+                        "color": color,
+                    }
+                )
         js_code = f"addStations({json.dumps(self.all_stations)});"
         self.map_view.page().runJavaScript(js_code)
 
@@ -322,7 +386,8 @@ class ManagerTab(QWidget):
             inventory = self.main_window.loaded_files.get(filepath)
             if inventory:
                 self.main_window.open_explorer_tab(
-                    filepath=filepath, inventory=inventory)
+                    filepath=filepath, inventory=inventory
+                )
 
     def copy_selected_item(self):
         item = self.file_tree.currentItem()
@@ -330,18 +395,22 @@ class ManagerTab(QWidget):
             self.clipboard_item = item.data(0, Qt.UserRole)
             QMessageBox.information(self, "Copied", f"Copied: {item.text(0)}")
         else:
-            QMessageBox.warning(self, "No Selection",
-                                "Please select an item to copy.")
+            QMessageBox.warning(
+                self, "No Selection", "Please select an item to copy."
+            )
 
     def paste_to_selected_item(self):
         if not self.clipboard_item:
-            QMessageBox.warning(self, "Clipboard Empty", "Copy an item first.")
+            QMessageBox.warning(
+                self, "Clipboard Empty", "Copy an item first."
+            )
             return
 
         target_item = self.file_tree.currentItem()
         if not target_item:
-            QMessageBox.warning(self, "No Selection",
-                                "Select a parent item to paste into.")
+            QMessageBox.warning(
+                self, "No Selection", "Select a parent item to paste into."
+            )
             return
 
         target_data = target_item.data(0, Qt.UserRole)
@@ -370,8 +439,9 @@ class ManagerTab(QWidget):
                 pasted_item = self._add_network_to_tree(target_item, net_copy)
 
         else:
-            QMessageBox.warning(self, "Invalid Paste",
-                                "Cannot paste this item here.")
+            QMessageBox.warning(
+                self, "Invalid Paste", "Cannot paste this item here."
+            )
 
         if pasted_item:
             target_item.setExpanded(True)
@@ -379,15 +449,17 @@ class ManagerTab(QWidget):
     def delete_selected_item(self):
         item = self.file_tree.currentItem()
         if not item:
-            QMessageBox.warning(self, "No Selection",
-                                "Select an item to delete.")
+            QMessageBox.warning(
+                self, "No Selection", "Select an item to delete."
+            )
             return
 
         parent = item.parent()
         data = item.data(0, Qt.UserRole)
         if not data:
-            QMessageBox.warning(self, "Invalid Selection",
-                                "Cannot delete this item.")
+            QMessageBox.warning(
+                self, "Invalid Selection", "Cannot delete this item."
+            )
             return
 
         type_, obj = data
@@ -403,8 +475,9 @@ class ManagerTab(QWidget):
                 sta_data[1].channels.remove(obj)
                 parent.removeChild(item)
         else:
-            QMessageBox.warning(self, "Invalid Delete",
-                                "Cannot delete this type of item.")
+            QMessageBox.warning(
+                self, "Invalid Delete", "Cannot delete this type of item."
+            )
 
     def _add_network_to_tree(self, file_item, net):
         net_item = QTreeWidgetItem([f"Network: {net.code}"])
@@ -437,8 +510,9 @@ class ManagerTab(QWidget):
         selected_item = self.file_tree.currentItem()
 
         if not selected_item:
-            QMessageBox.warning(self, "No Selection",
-                                "Select a parent to add a new item.")
+            QMessageBox.warning(
+                self, "No Selection", "Select a parent to add a new item."
+            )
             return
 
         data = selected_item.data(0, Qt.UserRole)
@@ -456,15 +530,16 @@ class ManagerTab(QWidget):
             net = Network(code="XX")
             inventory.networks.append(net)
             print(f"Added new network 'XX' to {filepath}")
-            net_item = self._add_network_to_tree(selected_item, net)
+            self._add_network_to_tree(selected_item, net)
             selected_item.setExpanded(True)
 
         elif type_ == "network":
             net = obj
-            sta = Station(code="STA", latitude=0.0,
-                          longitude=0.0, elevation=0.0)
+            sta = Station(
+                code="STA", latitude=0.0, longitude=0.0, elevation=0.0
+            )
             net.stations.append(sta)
-            sta_item = self._add_station_to_tree(selected_item, sta)
+            self._add_station_to_tree(selected_item, sta)
             selected_item.setExpanded(True)
 
         elif type_ == "station":
@@ -478,18 +553,22 @@ class ManagerTab(QWidget):
                 elevation=sta.elevation,
                 azimuth=0.0,
                 dip=-90.0,
-                sample_rate=100.0
+                sample_rate=100.0,
             )
 
             chan.response = Response()
 
             sta.channels.append(chan)
-            chan_item = self._add_channel_to_tree(selected_item, chan)
+            self._add_channel_to_tree(selected_item, chan)
             selected_item.setExpanded(True)
 
         else:
-            QMessageBox.warning(self, "Invalid Target",
-                                "You can only add new items under File, Network, or Station.")
+            QMessageBox.warning(
+                self,
+                "Invalid Target",
+                "You can only add new items under File, "
+                "Network, or Station.",
+            )
 
     def handle_selection_changed(self):
         selected_items = self.file_tree.selectedItems()
@@ -546,7 +625,9 @@ class ExplorerTab(QWidget):
     def create_new_field(self):
         item = self.tree.currentItem()
         if not item:
-            QMessageBox.warning(self, "No Selection", "Please select an item.")
+            QMessageBox.warning(
+                self, "No Selection", "Please select an item."
+            )
             return
 
         label_text = item.text(0)
@@ -555,23 +636,32 @@ class ExplorerTab(QWidget):
         if label_text.startswith("Network:"):
             net_code = label_text.replace("Network:", "").strip()
             net = next(
-                (n for n in parent_inventory.networks if n.code == net_code), None)
+                (n for n in parent_inventory.networks if n.code == net_code),
+                None,
+            )
             if not net:
                 QMessageBox.warning(
-                    self, "Error", "Could not find target Network.")
+                    self, "Error", "Could not find target Network."
+                )
                 return
 
-            sta = Station(code="STA", latitude=0.0,
-                          longitude=0.0, elevation=0.0)
+            sta = Station(
+                code="STA", latitude=0.0, longitude=0.0, elevation=0.0
+            )
             net.stations.append(sta)
             self.populate_tree(parent_inventory)
             return
 
         elif label_text.startswith("Station:"):
             ref_data = item.data(0, Qt.UserRole)
-            if not ref_data or not isinstance(ref_data, tuple) or ref_data[0] != "station":
+            if (
+                not ref_data
+                or not isinstance(ref_data, tuple)
+                or ref_data[0] != "station"
+            ):
                 QMessageBox.warning(
-                    self, "Error", "Station reference not found.")
+                    self, "Error", "Station reference not found."
+                )
                 return
 
             sta = ref_data[1]
@@ -588,14 +678,20 @@ class ExplorerTab(QWidget):
 
             if not net_code:
                 QMessageBox.warning(
-                    self, "Error", "Could not find parent Network for Station.")
+                    self,
+                    "Error",
+                    "Could not find parent Network for Station.",
+                )
                 return
 
             net = next(
-                (n for n in parent_inventory.networks if n.code == net_code), None)
+                (n for n in parent_inventory.networks if n.code == net_code),
+                None,
+            )
             if not net:
                 QMessageBox.warning(
-                    self, "Error", "Could not find Network in inventory.")
+                    self, "Error", "Could not find Network in inventory."
+                )
                 return
 
             chan = Channel(
@@ -607,7 +703,7 @@ class ExplorerTab(QWidget):
                 elevation=sta.elevation,
                 azimuth=0.0,
                 dip=-90.0,
-                sample_rate=100.0
+                sample_rate=100.0,
             )
             chan.response = Response()
             sta.channels.append(chan)
@@ -616,12 +712,14 @@ class ExplorerTab(QWidget):
 
         elif label_text.startswith("Channel:"):
             QMessageBox.information(
-                self, "Info", "Channels cannot contain sub-items.")
+                self, "Info", "Channels cannot contain sub-items."
+            )
             return
 
         elif label_text == "Response" or label_text.startswith("Stage"):
             QMessageBox.information(
-                self, "Info", "Cannot add fields inside a response.")
+                self, "Info", "Cannot add fields inside a response."
+            )
             return
 
         obj = self.current_obj
@@ -629,23 +727,34 @@ class ExplorerTab(QWidget):
             QMessageBox.warning(self, "Error", "No valid object selected.")
             return
 
-        all_attrs = sorted([
-            attr for attr in dir(obj)
-            if not attr.startswith("_")
-            and not callable(getattr(obj, attr))
-            and isinstance(getattr(obj, attr, None), (str, int, float, type(None)))
-        ])
+        all_attrs = sorted(
+            [
+                attr
+                for attr in dir(obj)
+                if not attr.startswith("_")
+                and not callable(getattr(obj, attr))
+                and isinstance(
+                    getattr(obj, attr, None), (str, int, float, type(None))
+                )
+            ]
+        )
 
-        missing_attrs = [a for a in all_attrs if getattr(
-            obj, a, None) in (None, "")]
+        missing_attrs = [
+            a for a in all_attrs if getattr(obj, a, None) in (None, "")
+        ]
 
         if not missing_attrs:
             QMessageBox.information(
-                self, "Info", "No missing editable fields found.")
+                self, "Info", "No missing editable fields found."
+            )
             return
 
         attr, ok = QInputDialog.getItem(
-            self, "Add Field", "Select a field to add:", missing_attrs, editable=False
+            self,
+            "Add Field",
+            "Select a field to add:",
+            missing_attrs,
+            editable=False,
         )
 
         if ok and attr:
@@ -663,11 +772,13 @@ class ExplorerTab(QWidget):
 
         if updated:
             QMessageBox.information(
-                self, "Saved", "Response updated successfully.")
+                self, "Saved", "Response updated successfully."
+            )
             self.populate_tree(self.current_inventory)
         else:
             QMessageBox.warning(
-                self, "Error", "Response not found in inventory.")
+                self, "Error", "Response not found in inventory."
+            )
 
     def populate_tree(self, inv):
         self.tree.clear()
@@ -679,11 +790,13 @@ class ExplorerTab(QWidget):
 
                 for field in dir(net):
                     if not field.startswith("_") and not callable(
-                            getattr(net, field)):
+                        getattr(net, field)
+                    ):
                         value = getattr(net, field)
                         if isinstance(value, (str, float, int)):
                             item = QTreeWidgetItem(
-                                net_item, [field, str(value)])
+                                net_item, [field, str(value)]
+                            )
                             item.setFlags(item.flags() | Qt.ItemIsEditable)
                             item.setData(0, Qt.UserRole, (net, field))
 
@@ -694,83 +807,126 @@ class ExplorerTab(QWidget):
 
                     for field in dir(sta):
                         if not field.startswith("_") and not callable(
-                                getattr(sta, field)):
+                            getattr(sta, field)
+                        ):
                             value = getattr(sta, field)
                             if isinstance(value, (str, float, int)):
                                 item = QTreeWidgetItem(
-                                    sta_item, [field, str(value)])
-                                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                                    sta_item, [field, str(value)]
+                                )
+                                item.setFlags(
+                                    item.flags() | Qt.ItemIsEditable
+                                )
                                 item.setData(0, Qt.UserRole, (sta, field))
 
                     for chan in sta.channels:
                         chan_item = QTreeWidgetItem(
-                            [f"Channel: {chan.code}", ""])
+                            [f"Channel: {chan.code}", ""]
+                        )
                         sta_item.addChild(chan_item)
                         leaf_item = QTreeWidgetItem(
-                            sta_item, [field, str(value)])
+                            sta_item, [field, str(value)]
+                        )
                         leaf_item.setFlags(
-                            leaf_item.flags() | Qt.ItemIsEditable)
+                            leaf_item.flags() | Qt.ItemIsEditable
+                        )
                         leaf_item.setData(0, Qt.UserRole, (chan, field))
                         for field in dir(chan):
                             if not field.startswith("_") and not callable(
-                                    getattr(chan, field)):
+                                getattr(chan, field)
+                            ):
                                 value = getattr(chan, field)
                                 if isinstance(value, (str, float, int)):
                                     item = QTreeWidgetItem(
-                                        chan_item, [field, str(value)])
+                                        chan_item, [field, str(value)]
+                                    )
                                     item.setFlags(
-                                        item.flags() | Qt.ItemIsEditable)
-                                    item.setData(0, Qt.UserRole, (chan, field))
+                                        item.flags() | Qt.ItemIsEditable
+                                    )
+                                    item.setData(
+                                        0, Qt.UserRole, (chan, field)
+                                    )
                         resp = chan.response
                         if resp:
                             resp_item = QTreeWidgetItem(["Response", ""])
                             chan_item.addChild(resp_item)
                             resp_item.setData(
-                                0, Qt.UserRole, ("response", chan.response))
+                                0, Qt.UserRole, ("response", chan.response)
+                            )
                             resp_item.setFlags(
-                                resp_item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                                resp_item.flags()
+                                | Qt.ItemIsSelectable
+                                | Qt.ItemIsEnabled
+                            )
                             if resp.instrument_sensitivity:
                                 QTreeWidgetItem(
-                                    resp_item, [
-                                        "Sensitivity Value", str(
-                                            resp.instrument_sensitivity.value)])
+                                    resp_item,
+                                    [
+                                        "Sensitivity Value",
+                                        str(
+                                            resp.instrument_sensitivity.value
+                                        ),
+                                    ],
+                                )
                                 QTreeWidgetItem(
-                                    resp_item, [
-                                        "Sensitivity Frequency", str(
-                                            resp.instrument_sensitivity.frequency)])
+                                    resp_item,
+                                    [
+                                        "Sensitivity Frequency",
+                                        str(
+                                            resp.instrument_sensitivity.
+                                            frequency
+                                        ),
+                                    ],
+                                )
 
                             for i, stage in enumerate(resp.response_stages):
                                 stage_item = QTreeWidgetItem(
-                                    [f"Stage {i+1}", type(stage).__name__])
+                                    [f"Stage {i+1}", type(stage).__name__]
+                                )
                                 resp_item.addChild(stage_item)
 
                                 if hasattr(stage, "stage_gain"):
                                     QTreeWidgetItem(
-                                        stage_item, [
-                                            "Stage Gain", str(
-                                                stage.stage_gain)])
+                                        stage_item,
+                                        ["Stage Gain", str(stage.stage_gain)],
+                                    )
 
                                 if hasattr(stage, "normalization_frequency"):
                                     QTreeWidgetItem(
-                                        stage_item, [
-                                            "Norm. Frequency", str(
-                                                stage.normalization_frequency)])
+                                        stage_item,
+                                        [
+                                            "Norm. Frequency",
+                                            str(
+                                                stage.normalization_frequency
+                                            ),
+                                        ],
+                                    )
 
                                 if hasattr(stage, "poles"):
                                     poles_item = QTreeWidgetItem(
-                                        stage_item, ["Poles", ""])
+                                        stage_item, ["Poles", ""]
+                                    )
                                     for j, p in enumerate(stage.poles):
                                         QTreeWidgetItem(
-                                            poles_item, [
-                                                f"Pole {j}", f"{p.real} + {p.imag}j"])
+                                            poles_item,
+                                            [
+                                                f"Pole {j}",
+                                                f"{p.real} + {p.imag}j",
+                                            ],
+                                        )
 
                                 if hasattr(stage, "zeros"):
                                     zeros_item = QTreeWidgetItem(
-                                        stage_item, ["Zeros", ""])
+                                        stage_item, ["Zeros", ""]
+                                    )
                                     for j, z in enumerate(stage.zeros):
                                         QTreeWidgetItem(
-                                            zeros_item, [
-                                                f"Zero {j}", f"{z.real} + {z.imag}j"])
+                                            zeros_item,
+                                            [
+                                                f"Zero {j}",
+                                                f"{z.real} + {z.imag}j",
+                                            ],
+                                        )
         except Exception as e:
             QTreeWidgetItem(self.tree, ["Error", str(e)])
         self.tree.itemSelectionChanged.connect(self.on_tree_selection_changed)
@@ -826,7 +982,8 @@ class ExplorerTab(QWidget):
 
         except Exception as e:
             QMessageBox.warning(
-                self, "Edit Error", f"Failed to update {attr}: {e}")
+                self, "Edit Error", f"Failed to update {attr}: {e}"
+            )
             item.setText(1, str(old_value))
 
     def handle_tree_double_click(self, item, column):
@@ -835,12 +992,19 @@ class ExplorerTab(QWidget):
             response = data[1]
 
             chan_item = item.parent() if item.parent() else None
-            sta_item = chan_item.parent() if chan_item and chan_item.parent() else None
-            net_item = sta_item.parent() if sta_item and sta_item.parent() else None
+            sta_item = (
+                chan_item.parent()
+                if chan_item and chan_item.parent()
+                else None
+            )
+            net_item = (
+                sta_item.parent() if sta_item and sta_item.parent() else None
+            )
 
             if not (chan_item and sta_item and net_item):
                 QMessageBox.warning(
-                    self, "Error", "Could not identify response hierarchy.")
+                    self, "Error", "Could not identify response hierarchy."
+                )
                 return
 
             chan_code = chan_item.text(0).replace("Channel: ", "").strip()
@@ -852,16 +1016,17 @@ class ExplorerTab(QWidget):
             self.main_window.open_response_tab(
                 response_id=unique_id,
                 response_data=response,
-                explorer_tab=self
+                explorer_tab=self,
             )
 
 
 class ResponseTab(QWidget):
-    def __init__(self, response_data, main_window, explorer_tab):
+    def __init__(self, response_data, main_window, explorer_tab, nrl_root):
         super().__init__()
         self.response = response_data
         self.main_window = main_window
         self.explorer_tab = explorer_tab
+        self.nrl_root = nrl_root
         self.response_layout = QVBoxLayout(self)
         self.load_response_editor(self.response)
 
@@ -881,7 +1046,10 @@ class ResponseTab(QWidget):
         if response.instrument_sensitivity:
             sens = response.instrument_sensitivity
             left_layout.addWidget(
-                QLabel(f"<b>Sensitivity:</b> {sens.value} @ {sens.frequency} Hz"))
+                QLabel(
+                    f"<b>Sensitivity:</b> {sens.value} @ {sens.frequency} Hz"
+                )
+            )
 
         self.stage_tree = QTreeWidget()
         self.stage_tree.setHeaderLabels(["Field", "Value"])
@@ -922,13 +1090,15 @@ class ResponseTab(QWidget):
         try:
             freq = np.logspace(-2, 2, 1000)
             h = response.get_evalresp_response_for_frequencies(
-                freq, output="DEF")
+                freq, output="DEF"
+            )
 
             amp = np.abs(h)
             phase = np.angle(h, deg=True)
 
             self.canvas.ax_amp.plot(
-                freq, amp, color="royalblue", label="Amplitude")
+                freq, amp, color="royalblue", label="Amplitude"
+            )
             self.canvas.ax_amp.set_title("Amplitude Response")
             self.canvas.ax_amp.set_ylabel("Amplitude")
             self.canvas.ax_amp.set_xscale("log")
@@ -936,7 +1106,8 @@ class ResponseTab(QWidget):
             self.canvas.ax_amp.legend()
 
             self.canvas.ax_phase.plot(
-                freq, phase, color="seagreen", label="Phase")
+                freq, phase, color="seagreen", label="Phase"
+            )
             self.canvas.ax_phase.set_title("Phase Response")
             self.canvas.ax_phase.set_xlabel("Frequency [Hz]")
             self.canvas.ax_phase.set_ylabel("Phase [°]")
@@ -945,9 +1116,11 @@ class ResponseTab(QWidget):
 
         except Exception as e:
             self.canvas.ax_amp.text(
-                0.5, 0.5, f"Error plotting: {e}", ha="center")
+                0.5, 0.5, f"Error plotting: {e}", ha="center"
+            )
             self.canvas.ax_phase.text(
-                0.5, 0.5, f"Error plotting: {e}", ha="center")
+                0.5, 0.5, f"Error plotting: {e}", ha="center"
+            )
         self.canvas.draw()
 
     def save_edited_response(self):
@@ -959,46 +1132,49 @@ class ResponseTab(QWidget):
         if response.instrument_sensitivity:
             sens = response.instrument_sensitivity
             sens_item = QTreeWidgetItem(
-                self.stage_tree, [
-                    "Instrument Sensitivity", ""])
+                self.stage_tree, ["Instrument Sensitivity", ""]
+            )
 
             val_item = QTreeWidgetItem(sens_item, ["Value", str(sens.value)])
             val_item.setFlags(val_item.flags() | Qt.ItemIsEditable)
             val_item.setData(0, Qt.UserRole, (sens, "value"))
 
             freq_item = QTreeWidgetItem(
-                sens_item, [
-                    "Frequency", str(
-                        sens.frequency)])
+                sens_item, ["Frequency", str(sens.frequency)]
+            )
             freq_item.setFlags(freq_item.flags() | Qt.ItemIsEditable)
             freq_item.setData(0, Qt.UserRole, (sens, "frequency"))
 
         for i, stage in enumerate(response.response_stages):
             stage_item = QTreeWidgetItem(
-                self.stage_tree, [
-                    f"Stage {i+1}: {type(stage).__name__}", ""])
+                self.stage_tree, [f"Stage {i+1}: {type(stage).__name__}", ""]
+            )
             if hasattr(stage, "stage_gain"):
                 item = QTreeWidgetItem(
-                    stage_item, [
-                        "Stage Gain", str(
-                            stage.stage_gain)])
+                    stage_item, ["Stage Gain", str(stage.stage_gain)]
+                )
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setData(0, Qt.UserRole, (stage, "stage_gain"))
             if hasattr(stage, "normalization_frequency"):
                 item = QTreeWidgetItem(
-                    stage_item, [
-                        "Normalization Freq", str(
-                            stage.normalization_frequency)])
+                    stage_item,
+                    [
+                        "Normalization Freq",
+                        str(stage.normalization_frequency),
+                    ],
+                )
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setData(
-                    0, Qt.UserRole, (stage, "normalization_frequency"))
+                    0, Qt.UserRole, (stage, "normalization_frequency")
+                )
 
             if hasattr(stage, "poles"):
                 poles_item = QTreeWidgetItem(stage_item, ["Poles", ""])
                 for j, pole in enumerate(stage.poles):
                     pole_item = QTreeWidgetItem(
-                        poles_item, [
-                            f"Pole {j}", f"{pole.real} + {pole.imag}j"])
+                        poles_item,
+                        [f"Pole {j}", f"{pole.real} + {pole.imag}j"],
+                    )
 
                     pole_item.setData(0, Qt.UserRole, ("pole", stage, j))
 
@@ -1006,8 +1182,9 @@ class ResponseTab(QWidget):
                 zeros_item = QTreeWidgetItem(stage_item, ["Zeros", ""])
                 for j, zero in enumerate(stage.zeros):
                     zero_item = QTreeWidgetItem(
-                        zeros_item, [
-                            f"Zero {j}", f"{zero.real} + {zero.imag}j"])
+                        zeros_item,
+                        [f"Zero {j}", f"{zero.real} + {zero.imag}j"],
+                    )
                     zero_item.setData(0, Qt.UserRole, ("zero", stage, j))
 
     def handle_response_edit(self, item, column):
@@ -1042,7 +1219,8 @@ class ResponseTab(QWidget):
 
         except Exception as e:
             QMessageBox.warning(
-                self, "Edit Error", f"Failed to update {attr}: {e}")
+                self, "Edit Error", f"Failed to update {attr}: {e}"
+            )
             item.setText(1, str(old_value))
 
     def edit_complex_value(self, item, column):
@@ -1060,7 +1238,9 @@ class ResponseTab(QWidget):
         if ref_type not in ("pole", "zero"):
             return
 
-        value = stage.poles[index] if ref_type == "pole" else stage.zeros[index]
+        value = (
+            stage.poles[index] if ref_type == "pole" else stage.zeros[index]
+        )
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit {ref_type.title()} {index}")
@@ -1075,7 +1255,8 @@ class ResponseTab(QWidget):
         layout.addWidget(imag_edit)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
         layout.addWidget(buttons)
 
         buttons.accepted.connect(dialog.accept)
@@ -1101,7 +1282,8 @@ class ResponseTab(QWidget):
 
             except ValueError:
                 QMessageBox.warning(
-                    self, "Invalid Input", "Please enter valid float numbers.")
+                    self, "Invalid Input", "Please enter valid float numbers."
+                )
 
     def select_response_from_inventory(self, inventory):
         dialog = QDialog(self)
@@ -1114,7 +1296,10 @@ class ResponseTab(QWidget):
         for net in inventory.networks:
             for sta in net.stations:
                 for chan in sta.channels:
-                    label = f"{net.code}.{sta.code}.{chan.location_code}.{chan.code}"
+                    label = (
+                        f"{net.code}.{sta.code}."
+                        f"{chan.location_code}.{chan.code}"
+                        )
                     combo.addItem(label)
                     channel_map[label] = chan
 
@@ -1122,7 +1307,8 @@ class ResponseTab(QWidget):
         layout.addWidget(combo)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
         layout.addWidget(buttons)
 
         buttons.accepted.connect(dialog.accept)
@@ -1136,45 +1322,54 @@ class ResponseTab(QWidget):
                 new_response = chan_to_copy.response
                 if new_response:
                     self.selected_response.response_stages = copy.deepcopy(
-                        new_response.response_stages)
-                    self.selected_response.instrument_sensitivity = copy.deepcopy(
-                        new_response.instrument_sensitivity)
+                        new_response.response_stages
+                    )
+                    self.selected_response.instrument_sensitivity = (
+                        copy.deepcopy(new_response.instrument_sensitivity)
+                    )
 
                     QMessageBox.information(
-                        self, "Success", "Response replaced successfully.")
-                    self.load_response_editor(
-                        self.selected_response)
+                        self, "Success", "Response replaced successfully."
+                    )
+                    self.load_response_editor(self.selected_response)
                     self.plot_response(self.selected_response)
                 else:
                     QMessageBox.warning(
-                        self, "No Response", "Selected channel has no response.")
+                        self,
+                        "No Response",
+                        "Selected channel has no response.",
+                    )
 
     def replace_response(self):
-        try:
-            folder = resource_path(os.path.join("resources", "NRL"))
-            dlg = ResponseSelectionDialog(folder, self)
-            dlg.exec_()
-            new_resp = dlg.get_response()
-        except Exception as e:
-            QMessageBox.warning(
-                self, "Error ", f"{e}")
-        if new_resp and hasattr(
-                self, "selected_response") and self.selected_response:
+        dlg = ResponseSelectionDialog(self.nrl_root, self)
+        dlg.exec_()
+        new_resp = dlg.get_response()
+        if (
+            new_resp
+            and hasattr(self, "selected_response")
+            and self.selected_response
+        ):
             self.selected_response.response_stages = copy.deepcopy(
-                new_resp.response_stages)
+                new_resp.response_stages
+            )
             self.selected_response.instrument_sensitivity = copy.deepcopy(
-                new_resp.instrument_sensitivity)
+                new_resp.instrument_sensitivity
+            )
 
             self.load_response_editor(self.selected_response)
             self.plot_response(self.selected_response)
             QMessageBox.information(
-                self, "Success", "Response loaded from local NRL.")
+                self, "Success", "Response loaded from local NRL."
+            )
 
     def new(self):
         item = self.stage_tree.currentItem()
         if not item:
-            QMessageBox.warning(self, "No Selection",
-                                "Select an item to add a new field under.")
+            QMessageBox.warning(
+                self,
+                "No Selection",
+                "Select an item to add a new field under.",
+            )
             return
 
         ref = item.data(0, Qt.UserRole)
@@ -1195,28 +1390,44 @@ class ResponseTab(QWidget):
                 return
 
         #  New Stage
-        is_stage_node = item.text(0).startswith(
-            "Stage") or item == self.stage_tree.invisibleRootItem()
+        is_stage_node = (
+            item.text(0).startswith("Stage")
+            or item == self.stage_tree.invisibleRootItem()
+        )
 
         if is_stage_node:
 
             possible_stages = (
-                "Response Stage", "Poles Zeros Response Stage",
-                "Coefficients Type Response Stage", "Response List Response Stage",
-                "FIR Response Stage", "Polynomial Response Stage",
+                "Response Stage",
+                "Poles Zeros Response Stage",
+                "Coefficients Type Response Stage",
+                "Response List Response Stage",
+                "FIR Response Stage",
+                "Polynomial Response Stage",
             )
             stage_type, ok = QInputDialog.getItem(
-                self, "Select Stage Type", "Stage type:", possible_stages, 0, False)
+                self,
+                "Select Stage Type",
+                "Stage type:",
+                possible_stages,
+                0,
+                False,
+            )
             if not ok:
                 return
 
             stage_builders = {
                 "Response Stage": self._build_response_stage,
-                "Poles Zeros Response Stage": self._build_poles_zeros_stage,
-                "Coefficients Type Response Stage": self._build_coefficients_type_stage,
-                "Response List Response Stage": self._build_response_list_stage,
-                "FIR Response Stage": self._build_fir_stage,
-                "Polynomial Response Stage": self._build_polynomial_stage,
+                "Poles Zeros Response Stage":
+                    self._build_poles_zeros_stage,
+                "Coefficients Type Response Stage":
+                    self._build_coefficients_type_stage,
+                "Response List Response Stage":
+                    self._build_response_list_stage,
+                "FIR Response Stage":
+                    self._build_fir_stage,
+                "Polynomial Response Stage":
+                    self._build_polynomial_stage,
             }
 
             builder_func = stage_builders.get(stage_type)
@@ -1230,27 +1441,37 @@ class ResponseTab(QWidget):
                 self.load_response_editor(self.selected_response)
                 return
 
-        QMessageBox.warning(self, "Unsupported Selection",
-                            "You can't create a new item under this element.")
+        QMessageBox.warning(
+            self,
+            "Unsupported Selection",
+            "You can't create a new item under this element.",
+        )
 
     def _get_common_stage_parameters(self):
         stage_gain, ok1 = QInputDialog.getDouble(
-            self, "Stage Gain", "Enter stage gain:", value=1.0)
+            self, "Stage Gain", "Enter stage gain:", value=1.0
+        )
         if not ok1:
             return None
 
         stage_gain_freq, ok2 = QInputDialog.getDouble(
-            self, "Stage Gain Frequency", "Enter gain frequency (Hz):", value=1.0)
+            self,
+            "Stage Gain Frequency",
+            "Enter gain frequency (Hz):",
+            value=1.0,
+        )
         if not ok2:
             return None
 
         input_units, ok3 = QInputDialog.getText(
-            self, "Input Units", "Enter input units:", text="M/S")
+            self, "Input Units", "Enter input units:", text="M/S"
+        )
         if not ok3:
             return None
 
         output_units, ok4 = QInputDialog.getText(
-            self, "Output Units", "Enter output units:", text="V")
+            self, "Output Units", "Enter output units:", text="V"
+        )
         if not ok4:
             return None
 
@@ -1258,7 +1479,7 @@ class ResponseTab(QWidget):
             "stage_gain": stage_gain,
             "stage_gain_frequency": stage_gain_freq,
             "input_units": input_units,
-            "output_units": output_units
+            "output_units": output_units,
         }
 
     def _build_response_stage(self):
@@ -1267,9 +1488,9 @@ class ResponseTab(QWidget):
             return None
 
         return ResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
-            **common_params
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
+            **common_params,
         )
 
     def _build_poles_zeros_stage(self):
@@ -1277,26 +1498,39 @@ class ResponseTab(QWidget):
         if not common_params:
             return None
 
-        possible_tf_types = ("LAPLACE (RADIANS/SECOND)",
-                             "LAPLACE (HERTZ)", "DIGITAL (Z-TRANSFORM)")
+        possible_tf_types = (
+            "LAPLACE (RADIANS/SECOND)",
+            "LAPLACE (HERTZ)",
+            "DIGITAL (Z-TRANSFORM)",
+        )
         pz_type, ok1 = QInputDialog.getItem(
-            self, "Transfer Function Type", "Select type:", possible_tf_types, 0, False)
+            self,
+            "Transfer Function Type",
+            "Select type:",
+            possible_tf_types,
+            0,
+            False,
+        )
         if not ok1:
             return None
 
         norm_freq, ok2 = QInputDialog.getDouble(
-            self, "Normalization Frequency", "Enter normalization frequency (Hz):", value=1.0)
+            self,
+            "Normalization Frequency",
+            "Enter normalization frequency (Hz):",
+            value=1.0,
+        )
         if not ok2:
             return None
 
         return PolesZerosResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
             normalization_frequency=norm_freq,
             pz_transfer_function_type=pz_type,
             zeros=[0.0 + 0.0j],
             poles=[0.0 + 0.0j],
-            **common_params
+            **common_params,
         )
 
     def _build_coefficients_type_stage(self):
@@ -1306,17 +1540,23 @@ class ResponseTab(QWidget):
 
         possible_tf_types = ("DIGITAL", "ANALOG")
         cf_type, ok = QInputDialog.getItem(
-            self, "Transfer Function Type", "Select type:", possible_tf_types, 0, False)
+            self,
+            "Transfer Function Type",
+            "Select type:",
+            possible_tf_types,
+            0,
+            False,
+        )
         if not ok:
             return None
 
         return CoefficientsTypeResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
             cf_transfer_function_type=cf_type,
             numerator=[1.0],
             denominator=[],
-            **common_params
+            **common_params,
         )
 
     def _build_response_list_stage(self):
@@ -1325,13 +1565,14 @@ class ResponseTab(QWidget):
             return None
 
         default_element = ResponseListElement(
-            frequency=1.0, amplitude=1.0, phase=0.0)
+            frequency=1.0, amplitude=1.0, phase=0.0
+        )
 
         return ResponseListResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
             response_list_elements=[default_element],
-            **common_params
+            **common_params,
         )
 
     def _build_fir_stage(self):
@@ -1341,16 +1582,22 @@ class ResponseTab(QWidget):
 
         symmetry_options = ("NONE", "ODD", "EVEN")
         symmetry, ok = QInputDialog.getItem(
-            self, "Symmetry", "Select FIR symmetry:", symmetry_options, 0, False)
+            self,
+            "Symmetry",
+            "Select FIR symmetry:",
+            symmetry_options,
+            0,
+            False,
+        )
         if not ok:
             return None
 
         return FIRResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
             symmetry=symmetry,
             coefficients=[1.0],  # Add default coefficient
-            **common_params
+            **common_params,
         )
 
     def _build_polynomial_stage(self):
@@ -1360,38 +1607,56 @@ class ResponseTab(QWidget):
 
         approx_types = ("MACLAURIN", "CHEBYSHEV")
         approx_type, ok1 = QInputDialog.getItem(
-            self, "Approximation Type", "Select type:", approx_types, 0, False)
+            self, "Approximation Type", "Select type:", approx_types, 0, False
+        )
         if not ok1:
             return None
 
         freq_lower, ok2 = QInputDialog.getDouble(
-            self, "Frequency Lower Bound", "Enter frequency lower bound (Hz):", value=0.0)
+            self,
+            "Frequency Lower Bound",
+            "Enter frequency lower bound (Hz):",
+            value=0.0,
+        )
         if not ok2:
             return None
 
         freq_upper, ok3 = QInputDialog.getDouble(
-            self, "Frequency Upper Bound", "Enter frequency upper bound (Hz):", value=100.0)
+            self,
+            "Frequency Upper Bound",
+            "Enter frequency upper bound (Hz):",
+            value=100.0,
+        )
         if not ok3:
             return None
 
         approx_lower, ok4 = QInputDialog.getDouble(
-            self, "Approximation Lower Bound", "Enter approximation lower bound:", value=0.0)
+            self,
+            "Approximation Lower Bound",
+            "Enter approximation lower bound:",
+            value=0.0,
+        )
         if not ok4:
             return None
 
         approx_upper, ok5 = QInputDialog.getDouble(
-            self, "Approximation Upper Bound", "Enter approximation upper bound:", value=1.0)
+            self,
+            "Approximation Upper Bound",
+            "Enter approximation upper bound:",
+            value=1.0,
+        )
         if not ok5:
             return None
 
         max_error, ok6 = QInputDialog.getDouble(
-            self, "Maximum Error", "Enter maximum error:", value=0.0)
+            self, "Maximum Error", "Enter maximum error:", value=0.0
+        )
         if not ok6:
             return None
 
         return PolynomialResponseStage(
-            stage_sequence_number=len(
-                self.selected_response.response_stages) + 1,
+            stage_sequence_number=len(self.selected_response.response_stages)
+            + 1,
             approximation_type=approx_type,
             frequency_lower_bound=freq_lower,
             frequency_upper_bound=freq_upper,
@@ -1399,14 +1664,15 @@ class ResponseTab(QWidget):
             approximation_upper_bound=approx_upper,
             maximum_error=max_error,
             coefficients=[1.0],
-            **common_params
+            **common_params,
         )
 
     def delete(self):
         item = self.stage_tree.currentItem()
         if not item:
-            QMessageBox.warning(self, "No Selection",
-                                "Select a field to delete.")
+            QMessageBox.warning(
+                self, "No Selection", "Select a field to delete."
+            )
             return
 
         ref = item.data(0, Qt.UserRole)
@@ -1414,8 +1680,11 @@ class ResponseTab(QWidget):
             return
 
         reply = QMessageBox.question(
-            self, "Confirm Delete", "Are you sure you want to delete this field?",
-            QMessageBox.Yes | QMessageBox.No)
+            self,
+            "Confirm Delete",
+            "Are you sure you want to delete this field?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
 
         if reply != QMessageBox.Yes:
             return
@@ -1440,7 +1709,8 @@ class ResponseTab(QWidget):
                     return
                 except Exception as e:
                     QMessageBox.warning(
-                        self, "Error", f"Could not delete attribute: {e}")
+                        self, "Error", f"Could not delete attribute: {e}"
+                    )
                     return
 
         parent = item.parent()
@@ -1503,7 +1773,8 @@ class ResponseSelectionDialog(QDialog):
         main_layout.addWidget(datalogger_group)
 
         self.button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
         main_layout.addWidget(self.button_box)
 
         sensor_file_btn.clicked.connect(self.select_sensor_from_file)
@@ -1524,7 +1795,10 @@ class ResponseSelectionDialog(QDialog):
                     self.sensor_info = f"From NRL: {desc}"
                 except Exception as e:
                     QMessageBox.critical(
-                        self, "NRL Error", f"Failed to get sensor response:\n{e}")
+                        self,
+                        "NRL Error",
+                        f"Failed to get sensor response:\n{e}",
+                    )
                     self.sensor_response = None
             self._update_ui()
 
@@ -1534,18 +1808,26 @@ class ResponseSelectionDialog(QDialog):
             keys, desc = wizard.get_result()
             if keys:
                 try:
-                    self.digitizer_response = self.nrl.get_datalogger_response(
-                        keys)
+                    self.digitizer_response = (
+                        self.nrl.get_datalogger_response(keys)
+                    )
                     self.digitizer_info = f"From NRL: {desc}"
                 except Exception as e:
                     QMessageBox.critical(
-                        self, "NRL Error", f"Failed to get datalogger response:\n{e}")
+                        self,
+                        "NRL Error",
+                        f"Failed to get datalogger response:\n{e}",
+                    )
                     self.digitizer_response = None
             self._update_ui()
 
     def select_sensor_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Sensor Response File", "", "StationXML (*.xml);;RESP (*.resp);;All Files (*)")
+            self,
+            "Select Sensor Response File",
+            "",
+            "StationXML (*.xml);;RESP (*.resp);;All Files (*)",
+        )
         if path:
             try:
                 inv = read_inventory(path)
@@ -1553,13 +1835,18 @@ class ResponseSelectionDialog(QDialog):
                 self.sensor_info = f"From file: {os.path.basename(path)}"
             except Exception as e:
                 QMessageBox.warning(
-                    self, "Error", f"Failed to read file:\n{e}")
+                    self, "Error", f"Failed to read file:\n{e}"
+                )
                 self.sensor_response = None
             self._update_ui()
 
     def select_digitizer_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Digitizer Response File", "", "StationXML (*.xml);;RESP (*.resp);;All Files (*)")
+            self,
+            "Select Digitizer Response File",
+            "",
+            "StationXML (*.xml);;RESP (*.resp);;All Files (*)",
+        )
         if path:
             try:
                 inv = read_inventory(path)
@@ -1567,7 +1854,8 @@ class ResponseSelectionDialog(QDialog):
                 self.digitizer_info = f"From file: {os.path.basename(path)}"
             except Exception as e:
                 QMessageBox.warning(
-                    self, "Error", f"Failed to read file:\n{e}")
+                    self, "Error", f"Failed to read file:\n{e}"
+                )
                 self.digitizer_response = None
             self._update_ui()
 
@@ -1577,7 +1865,9 @@ class ResponseSelectionDialog(QDialog):
 
         ok_button = self.button_box.button(QDialogButtonBox.Ok)
         ok_button.setEnabled(
-            self.sensor_response is not None and self.digitizer_response is not None)
+            self.sensor_response is not None
+            and self.digitizer_response is not None
+        )
 
     def accept(self):
         try:
@@ -1585,7 +1875,7 @@ class ResponseSelectionDialog(QDialog):
             print("Digitizer:", self.digitizer_response)
             final_response = combine_resp(
                 deepcopy(self.sensor_response),
-                deepcopy(self.digitizer_response)
+                deepcopy(self.digitizer_response),
             )
             self.final_resp = final_response
             print("Final inventory built:", self.final_resp)
@@ -1593,7 +1883,10 @@ class ResponseSelectionDialog(QDialog):
         except Exception as e:
             print("Combine error:", e)
             QMessageBox.critical(
-                self, "Response Combination Error", f"Could not combine responses:\n{e}")
+                self,
+                "Response Combination Error",
+                f"Could not combine responses:\n{e}",
+            )
             self.final_resp = None
 
     def get_response(self):
@@ -1612,7 +1905,9 @@ class NRLWizard(QDialog):
         self.nrl_root = nrl_root
         self.stage = stage
 
-        initial_dir = os.path.normpath(os.path.join(self.nrl_root, self.stage))
+        initial_dir = os.path.normpath(
+            os.path.join(self.nrl_root, self.stage)
+        )
         self.path_stack = [(initial_dir, None)]
 
         self.selected_keys = []
@@ -1672,31 +1967,39 @@ class NRLWizard(QDialog):
 
         if not os.path.isfile(config_path):
             QMessageBox.warning(
-                self, "Error", f"Missing configuration file:\n{config_path}")
+                self, "Error", f"Missing configuration file:\n{config_path}"
+            )
             self.go_back()
             return
 
         config = self._read_config(config_path)
         if not config:
             QMessageBox.critical(
-                self, "Read Error", f"Could not read or parse the config file:\n{config_path}")
+                self,
+                "Read Error",
+                f"Could not read or parse the config file:\n{config_path}",
+            )
             self.go_back()
             return
 
-        self.question_label.setText(config.get(
-            "Main", "question", fallback="Make a selection"))
+        self.question_label.setText(
+            config.get("Main", "question", fallback="Make a selection")
+        )
 
         self.option_buttons = {}
         base_dir = current_dir
 
-        sections = sorted([s for s in config.sections()
-                          if s != "Main"], key=str.lower)
+        sections = sorted(
+            [s for s in config.sections() if s != "Main"], key=str.lower
+        )
         for section in sections:
-            raw_path = config.get(
-                section, "path", fallback="").strip().strip('"')
+            raw_path = (
+                config.get(section, "path", fallback="").strip().strip('"')
+            )
             btn = QRadioButton(wrap_text(section))
             btn.toggled.connect(
-                lambda checked, s=section: self.set_selection(s))
+                lambda checked, s=section: self.set_selection(s)
+            )
             self.scroll_layout.addWidget(btn)
 
             resolved_path = os.path.normpath(os.path.join(base_dir, raw_path))
@@ -1716,20 +2019,25 @@ class NRLWizard(QDialog):
         self.clear_layout(self.scroll_layout)
         self.next_btn.setText("Finish")
 
-        question = config.get("Main", "question",
-                              fallback="Select configuration")
+        question = config.get(
+            "Main", "question", fallback="Select configuration"
+        )
         self.question_label.setText(question)
 
         self.option_buttons = {}
         for section in [s for s in config.sections() if s != "Main"]:
-            desc = config.get(section, "description",
-                              fallback="").strip().strip('"')
+            desc = (
+                config.get(section, "description", fallback="")
+                .strip()
+                .strip('"')
+            )
             xml = config.get(section, "xml", fallback="").strip().strip('"')
 
             label = f"{section}: {desc}"
             btn = QRadioButton(wrap_text(label))
             btn.toggled.connect(
-                lambda checked, s=section: self.set_selection(s))
+                lambda checked, s=section: self.set_selection(s)
+            )
             self.scroll_layout.addWidget(btn)
             self.option_buttons[section] = (btn, xml)
 
@@ -1737,14 +2045,16 @@ class NRLWizard(QDialog):
 
         self.back_bool_flag = False
         if not self.selected_option:
-            QMessageBox.warning(self, "Selection Required",
-                                "Please select an option.")
+            QMessageBox.warning(
+                self, "Selection Required", "Please select an option."
+            )
             return
 
         if self._final_xml_config:
             self.selected_keys.append(self.selected_option)
-            self.final_description = self.option_buttons[self.selected_option][0].text(
-            )
+            self.final_description = self.option_buttons[
+                self.selected_option
+            ][0].text()
             self.accept()
             return
 
@@ -1760,12 +2070,14 @@ class NRLWizard(QDialog):
                 sections = [s for s in config.sections() if s != "Main"]
 
                 is_final = all(config.has_option(s, "xml") for s in sections)
-                is_intermediate = all(config.has_option(s, "path")
-                                      for s in sections)
+                is_intermediate = all(
+                    config.has_option(s, "path") for s in sections
+                )
 
                 self.selected_keys.append(self.selected_option)
                 self.path_stack.append(
-                    (os.path.dirname(next_path), os.path.basename(next_path)))
+                    (os.path.dirname(next_path), os.path.basename(next_path))
+                )
 
                 if is_final:
                     self.load_final_xml_choices(config)
@@ -1773,15 +2085,24 @@ class NRLWizard(QDialog):
                     self.load_step()
                 else:
                     QMessageBox.warning(
-                        self, "NRL Error", f"Invalid config file format:\n{next_path}")
+                        self,
+                        "NRL Error",
+                        f"Invalid config file format:\n{next_path}",
+                    )
                     self.go_back()
             else:
                 QMessageBox.warning(
-                    self, "NRL Error", f"Invalid config file format:\n{next_path}")
+                    self,
+                    "NRL Error",
+                    f"Invalid config file format:\n{next_path}",
+                )
                 self.go_back()
         else:
-            QMessageBox.warning(self, "NRL Error",
-                                f"Unrecognized or invalid path:\n{next_path}")
+            QMessageBox.warning(
+                self,
+                "NRL Error",
+                f"Unrecognized or invalid path:\n{next_path}",
+            )
 
     def go_back(self):
         self.back_bool_flag = True
@@ -1793,7 +2114,10 @@ class NRLWizard(QDialog):
 
     def set_selection(self, section):
 
-        if section in self.option_buttons and self.option_buttons[section][0].isChecked():
+        if (
+            section in self.option_buttons
+            and self.option_buttons[section][0].isChecked()
+        ):
             self.selected_option = section
 
     def get_result(self):
@@ -1807,7 +2131,7 @@ class NRLWizard(QDialog):
         config = configparser.ConfigParser()
         config.optionxform = str
         try:
-            config.read(path, encoding='utf-8-sig')
+            config.read(path, encoding="utf-8-sig")
             return config
         except Exception as e:
             print(f"Error reading config file {path}: {e}")
@@ -1826,156 +2150,306 @@ class StationInventoryWizard(QDialog):
         super().__init__(parent)
         self.nrl_root = nrl_root
         self.setWindowTitle("Station Inventory Creation Wizard")
-        self.setMinimumWidth(700)
+        self.resize(800, 600)
         self.inventory = None
-        self.response1 = None
-        self.response1_info = "Not Selected"
+        self.groups = {}
         self._init_ui()
         if initial_data:
             self._populate_from_initial_data(initial_data)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
         station_group = QGroupBox("Station Parameters")
         station_layout = QFormLayout()
         self.net_edit = QLineEdit("XX")
         self.sta_edit = QLineEdit("STA")
-        self.lat_spin = QDoubleSpinBox()
-        self.lat_spin.setRange(-90.0, 90.0)
-        self.lat_spin.setDecimals(6)
-        self.lon_spin = QDoubleSpinBox()
-        self.lon_spin.setRange(-180.0, 180.0)
-        self.lon_spin.setDecimals(6)
-        self.ele_spin = QDoubleSpinBox()
-        self.ele_spin.setRange(-1000, 9000)
-        self.ele_spin.setDecimals(1)
-        self.start_date_edit = QDateTimeEdit(QDateTime.currentDateTimeUtc())
-        self.start_date_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         station_layout.addRow("Network Code:", self.net_edit)
         station_layout.addRow("Station Code:", self.sta_edit)
-        station_layout.addRow("Latitude:", self.lat_spin)
-        station_layout.addRow("Longitude:", self.lon_spin)
-        station_layout.addRow("Elevation (m):", self.ele_spin)
-        station_layout.addRow("Start Date:", self.start_date_edit)
         station_group.setLayout(station_layout)
         main_layout.addWidget(station_group)
-        channel_group = QGroupBox("Channel Setup")
-        channel_layout = QFormLayout()
-        self.loc_edit = QLineEdit("00")
-        self.chan_base_edit = QLineEdit("HH")
-        self.chan_components_edit = QLineEdit("Z,N,E")
-        self.chan_components_edit.setToolTip(
-            "Comma-separated channel endings (e.g., Z,N,E or 1,2,Z)")
-        channel_layout.addRow("Location Code:", self.loc_edit)
-        channel_layout.addRow("Channel Base Code:", self.chan_base_edit)
-        channel_layout.addRow("Channel Components:", self.chan_components_edit)
-        channel_group.setLayout(channel_layout)
-        main_layout.addWidget(channel_group)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.groups_layout = QHBoxLayout(self.scroll_content)
+        self.scroll.setWidget(self.scroll_content)
+        main_layout.addWidget(self.scroll)
+        group1_box = QGroupBox("Channel Group 1 (Primary)")
+        self.groups[1] = self._create_channel_group_widgets()
+        group1_layout = self._create_layout_from_widgets(self.groups[1])
+        self.groups[1]["resp_btn"].clicked.connect(
+            lambda: self._select_response(1)
+        )
+        group1_box.setLayout(group1_layout)
+        self.groups_layout.addWidget(group1_box)
+        self.group2_box = QGroupBox("Channel Group 2 (Secondary)")
+        self.group2_box.setCheckable(False)
+        self.groups[2] = self._create_channel_group_widgets()
+        group2_layout = self._create_layout_from_widgets(self.groups[2])
+        self.groups[2]["resp_btn"].clicked.connect(
+            lambda: self._select_response(2)
+        )
+        self.group2_box.setLayout(group2_layout)
+        self.groups_layout.addWidget(self.group2_box)
+        self.group2_box.setVisible(False)
+        self.toggle_group2_cb = QCheckBox("Enable Secondary Channel Group")
+        self.toggle_group2_cb.toggled.connect(self.group2_box.setVisible)
+        self.toggle_group2_cb.toggled.connect(self._on_toggle_group2)
 
-        self.response_group1 = QGroupBox("Instrument Response")
-        resp1_layout = QHBoxLayout()
-        self.resp1_label = QLabel(self.response1_info)
-        self.resp1_btn = QPushButton("Select...")
-        self.resp1_btn.clicked.connect(self._select_response)
-        resp1_layout.addWidget(self.resp1_label)
-        resp1_layout.addWidget(self.resp1_btn)
-        self.response_group1.setLayout(resp1_layout)
-        main_layout.addWidget(self.response_group1)
+        main_layout.insertWidget(2, self.toggle_group2_cb)
 
         self.button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         main_layout.addWidget(self.button_box)
+
+    def _create_channel_group_widgets(self):
+        loc_edit = QLineEdit("00")
+        loc_edit.setToolTip(
+            "One code for all, or a comma-separated list per component."
+        )
+        comp_edit = QLineEdit("Z,N,E")
+        comp_edit.setToolTip(
+            "Comma-separated channel endings (e.g., Z,N,E or 1,2,Z)"
+        )
+
+        return {
+            "loc": loc_edit,
+            "base": QLineEdit("HH"),
+            "comp": comp_edit,
+            "lat": QLineEdit("0.0"),
+            "lon": QLineEdit("0.0"),
+            "ele": QLineEdit("0.0"),
+            "depth": QLineEdit("0.0"),
+            "date": QDateTimeEdit(QDateTime.currentDateTimeUtc()),
+            "resp_label": QLabel("Not Selected"),
+            "resp_btn": QPushButton("Select Response..."),
+            "response_obj": None,
+            "response_info": "Not Selected",
+        }
+
+    def _create_layout_from_widgets(self, widgets):
+        """Builds a QFormLayout from a dictionary of widgets."""
+        layout = QFormLayout()
+        widgets["date"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        layout.addRow("Location Code(s):", widgets["loc"])
+        layout.addRow("Channel Base Code:", widgets["base"])
+        layout.addRow("Channel Components:", widgets["comp"])
+        layout.addRow("Start Date:", widgets["date"])
+        layout.addRow("Latitude:", widgets["lat"])
+        layout.addRow("Longitude:", widgets["lon"])
+        layout.addRow("Elevation (m):", widgets["ele"])
+        layout.addRow("Depth (m):", widgets["depth"])
+        layout.addRow("Instrument Response:", widgets["resp_label"])
+        layout.addRow(widgets["resp_btn"])
+        return layout
 
     def _populate_from_initial_data(self, data):
         """Pre-fills the form with data from MiniSEED import."""
         self.net_edit.setText(data.get("net", ""))
         self.sta_edit.setText(data.get("sta", ""))
-        self.loc_edit.setText(data.get("loc", ""))
-        self.chan_base_edit.setText(data.get("chan_base", ""))
-        self.chan_components_edit.setText(",".join(data.get("components", [])))
+        if "group1" in data:
+            g1_data = data["group1"]
+            self.groups[1]["loc"].setText(g1_data.get("locs", ""))
+            self.groups[1]["base"].setText(g1_data.get("base", ""))
+            self.groups[1]["comp"].setText(g1_data.get("comps", ""))
+        if "group2" in data:
+            self.toggle_group2_cb.setChecked(True)
+            g2_data = data["group2"]
+            self.groups[2]["loc"].setText(g2_data.get("locs", ""))
+            self.groups[2]["base"].setText(g2_data.get("base", ""))
+            self.groups[2]["comp"].setText(g2_data.get("comps", ""))
 
-    def _select_response(self):
+    def _select_response(self, group_num):
         dialog = ResponseSelectionDialog(self.nrl_root, self)
         if dialog.exec_() == QDialog.Accepted:
-            self.response1, s_info, d_info = dialog.get_response()
-            if self.response1:
-                self.response1_info = f"Sensor: {s_info} | Datalogger: {d_info}"
-                self.resp1_label.setText(wrap_text(self.response1_info))
+            response_obj, s_info, d_info = dialog.get_response()
+            group_widgets = self.groups[group_num]
+            group_widgets["response_obj"] = response_obj
+            group_widgets["response_info"] = (
+                f"Sensor: {s_info} | Datalogger: {d_info}"
+            )
+            group_widgets["resp_label"].setText(
+                wrap_text(group_widgets["response_info"])
+            )
+
+        self.scroll_content.adjustSize()
+        self.groups_layout.update()
+        content_size = self.scroll_content.sizeHint()
+        extra_width = 40
+        extra_height = 80
+        new_width = max(self.width(), content_size.width() + extra_width)
+        new_height = max(self.height(), content_size.height() + extra_height)
+        self.resize(new_width, new_height)
+
+    def _on_toggle_group2(self, checked):
+        self.group2_box.setVisible(checked)
+        self.scroll_content.adjustSize()
+        self.groups_layout.update()
+        self.scroll.updateGeometry()
+        content_size = self.scroll_content.sizeHint()
+        extra_width = 40
+        extra_height = 80
+        new_width = max(self.width(), content_size.width() + extra_width)
+        new_height = max(self.height(), content_size.height() + extra_height)
+        self.resize(new_width, new_height)
 
     def accept(self):
         if not self._validate_inputs():
             return
         try:
             self._build_inventory()
-            default_filename = f"{self.inventory[0].code}.{self.inventory[0][0].code}.xml"
+            default_filename = (
+                f"{self.inventory[0].code}.{self.inventory[0][0].code}.xml"
+            )
             save_path, _ = QFileDialog.getSaveFileName(
-                self, "Save Inventory File", default_filename, "StationXML (*.xml)")
+                self,
+                "Save Inventory File",
+                default_filename,
+                "StationXML (*.xml)",
+            )
             if save_path:
                 self.inventory.write(save_path, format="STATIONXML")
                 QMessageBox.information(
-                    self, "Success", f"Inventory saved to:\n{save_path}")
+                    self, "Success", f"Inventory saved to:\n{save_path}"
+                )
                 super().accept()
         except Exception as e:
-            QMessageBox.critical(self, "Build Error",
-                                 f"Failed to build or save inventory:\n{e}")
+            QMessageBox.critical(
+                self,
+                "Build Error",
+                f"Failed to build or save inventory:\n{e}",
+            )
 
     def _validate_inputs(self):
-        if not all([self.net_edit.text(), self.sta_edit.text(), self.chan_base_edit.text(), self.chan_components_edit.text()]):
+        if not all([self.net_edit.text(), self.sta_edit.text()]):
             QMessageBox.warning(
-                self, "Input Error", "All station and channel code fields are required.")
+                self, "Input Error", "Network and Station codes are required."
+            )
             return False
-        if not self.response1:
-            QMessageBox.warning(self, "Input Error",
-                                "An instrument response must be selected.")
+        try:
+            self._parse_channel_group(self.groups[1], "Group 1")
+            if self.toggle_group2_cb.isChecked():
+                self._parse_channel_group(self.groups[2], "Group 2")
+        except ValueError as e:
+            QMessageBox.warning(self, "Input Error", str(e))
             return False
         return True
 
-    def _build_inventory(self):
-        net_code, sta_code, loc_code = self.net_edit.text().upper(
-        ), self.sta_edit.text().upper(), self.loc_edit.text().upper()
-        lat, lon, ele = self.lat_spin.value(), self.lon_spin.value(), self.ele_spin.value()
-        start_date = UTCDateTime(
-            self.start_date_edit.dateTime().toPyDateTime())
-        base = self.chan_base_edit.text().upper()
-        components = [c.strip().upper()
-                      for c in self.chan_components_edit.text().split(',')]
+    def _parse_channel_group(self, widgets, group_name):
+        if not all(
+            [
+                widgets["loc"].text(),
+                widgets["base"].text(),
+                widgets["comp"].text(),
+            ]
+        ):
+            raise ValueError(
+                f"{group_name}: All channel code fields are required."
+            )
+        if not widgets["response_obj"]:
+            raise ValueError(
+                f"{group_name}: An instrument response must be selected."
+            )
 
+        locs = [
+            loc.strip().upper()
+            for loc in widgets["loc"].text().split(",")
+            if loc.strip()
+        ]
+        comps = [
+            c.strip().upper()
+            for c in widgets["comp"].text().split(",")
+            if c.strip()
+        ]
+
+        if len(locs) != 1 and len(locs) != len(comps):
+            raise ValueError(
+                f"{group_name}: The number of Location Codes must be 1 or "
+                f"match the number of Channel Components."
+            )
+
+        if len(locs) == 1 and len(comps) > 1:
+            locs = locs * len(comps)
+
+        return locs, comps
+
+    def _build_inventory(self):
+        all_channels = []
+        all_channels.extend(
+            self._build_channels_for_group(self.groups[1], "Group 1")
+        )
+        if self.toggle_group2_cb.isChecked():
+            all_channels.extend(
+                self._build_channels_for_group(self.groups[2], "Group 2")
+            )
+
+        g1w = self.groups[1]
+        station = Station(
+            code=self.sta_edit.text().upper(),
+            latitude=float(g1w["lat"].text()),
+            longitude=float(g1w["lon"].text()),
+            elevation=float(g1w["ele"].text()),
+            creation_date=UTCDateTime(g1w["date"].dateTime().toPyDateTime()),
+            channels=all_channels,
+        )
+        network = Network(
+            code=self.net_edit.text().upper(), stations=[station]
+        )
+        self.inventory = Inventory(
+            networks=[network], source="StationInventoryWizard"
+        )
+
+    def _build_channels_for_group(self, widgets, group_name):
         channels = []
-        for comp in components:
+        locs, comps = self._parse_channel_group(widgets, group_name)
+        base = widgets["base"].text().upper()
+
+        for i, comp in enumerate(comps):
             code = base + comp
-            az, dip = 0, 0  # Default orientation
-            if comp.endswith('E'):
+            az, dip = (0, 0)
+            if comp.endswith("E"):
                 az, dip = 90, 0
-            elif comp.endswith('N'):
+            elif comp.endswith("N"):
                 az, dip = 0, 0
-            elif comp.endswith('Z'):
+            elif comp.endswith("Z"):
                 az, dip = 0, -90
 
-            channels.append(Channel(
-                code=code, location_code=loc_code, latitude=lat, longitude=lon, elevation=ele,
-                depth=0, azimuth=az, dip=dip, sample_rate=self.response1.instrument_sensitivity.frequency,
-                start_date=start_date, response=self.response1
-            ))
+            response = widgets["response_obj"]
+            rate = (
+                response.instrument_sensitivity.frequency
+                if isinstance(response, Response)
+                else 100.0
+            )
 
-        station = Station(code=sta_code, latitude=lat, longitude=lon,
-                          elevation=ele, creation_date=start_date, channels=channels)
-        network = Network(code=net_code, stations=[station])
-        self.inventory = Inventory(
-            networks=[network], source="StationInventoryWizard")
+            channels.append(
+                Channel(
+                    code=code,
+                    location_code=locs[i],
+                    latitude=float(widgets["lat"].text()),
+                    longitude=float(widgets["lon"].text()),
+                    elevation=float(widgets["ele"].text()),
+                    depth=float(widgets["depth"].text()),
+                    azimuth=az,
+                    dip=dip,
+                    sample_rate=rate,
+                    start_date=UTCDateTime(
+                        widgets["date"].dateTime().toPyDateTime()
+                    ),
+                    response=response,
+                )
+            )
+        return channels
 
 
 class ImportFromMiniSEEDDialog(QDialog):
-    """A dialog to select a MiniSEED file and extract metadata."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Import from MiniSEED")
         self.setMinimumWidth(400)
-        self.filepath = ""
         self.initial_data = {}
-
         layout = QFormLayout(self)
         self.path_edit = QLineEdit()
         self.path_edit.setReadOnly(True)
@@ -1983,16 +2457,20 @@ class ImportFromMiniSEEDDialog(QDialog):
         browse_btn.clicked.connect(self.browse_file)
         layout.addRow("MiniSEED File:", self.path_edit)
         layout.addRow("", browse_btn)
-
         button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addRow(button_box)
 
     def browse_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select MiniSEED File", "", "MiniSEED files (*.mseed *.ms)")
+            self,
+            "Select MiniSEED File",
+            "",
+            "MiniSEED files (*.mseed *.msd *.miniseed)",
+        )
         if path:
             self.filepath = path
             self.path_edit.setText(path)
@@ -2000,69 +2478,69 @@ class ImportFromMiniSEEDDialog(QDialog):
     def accept(self):
         if not self.filepath:
             QMessageBox.warning(
-                self, "No File", "Please select a MiniSEED file.")
+                self, "No File", "Please select a MiniSEED file."
+            )
             return
         try:
             stream = read(self.filepath, headonly=False)
             if not stream:
                 QMessageBox.warning(
-                    self, "Empty File", "The selected file contains no data traces.")
+                    self,
+                    "Empty File",
+                    "The selected file contains no data traces.",
+                )
                 return
+            stream = [tr for tr in stream if len(tr.data) > 0]
+            grouped_channels = {}
             for tr in stream:
-                if len(tr) == 0:
-                    stream.remove(tr)
-            components = OrderedDict()
+                band_code = tr.stats.channel[0]
+                if band_code not in grouped_channels:
+                    grouped_channels[band_code] = []
+                grouped_channels[band_code].append(tr)
+
             first_trace = stream[0]
-            net = first_trace.stats.network
-            sta = first_trace.stats.station
-            loc = first_trace.stats.location
+            self.initial_data = {
+                "net": first_trace.stats.network,
+                "sta": first_trace.stats.station,
+            }
 
-            chan_codes = sorted(list(set(tr.stats.channel for tr in stream)))
-            if len(chan_codes[0]) > 1:
-                base = os.path.commonprefix(chan_codes)
-                if len(base) > 0:
-                    comps = [ch.replace(base, '', 1) for ch in chan_codes]
-                else:
-                    base = ""
-                    comps = chan_codes
-            else:
-                base = ""
-                comps = chan_codes
+            group_keys = sorted(grouped_channels.keys())
+            if len(group_keys) > 0:
+                self.initial_data["group1"] = self._process_channel_group(
+                    grouped_channels[group_keys[0]]
+                )
+            if len(group_keys) > 1:
+                self.initial_data["group2"] = self._process_channel_group(
+                    grouped_channels[group_keys[1]]
+                )
 
-            self.initial_data = {"net": net, "sta": sta,
-                                 "loc": loc, "chan_base": base, "components": comps}
             super().accept()
-
         except Exception as e:
-            QMessageBox.critical(self, "Read Error",
-                                 f"Could not read or parse the file:\n{e}")
+            QMessageBox.critical(
+                self, "Read Error", f"Could not read or parse the file:\n{e}"
+            )
+
+    def _process_channel_group(self, traces):
+        chan_info = sorted(
+            list(set((tr.stats.location, tr.stats.channel) for tr in traces)),
+            key=lambda x: x[1],
+        )
+
+        locs = [info[0] for info in chan_info]
+        chan_codes = [info[1] for info in chan_info]
+
+        base = (
+            os.path.commonprefix(chan_codes)
+            if len(chan_codes) > 1
+            else chan_codes[0][:2]
+        )
+        comps = [ch.replace(base, "", 1) for ch in chan_codes]
+
+        return {
+            "locs": ",".join(locs),
+            "base": base,
+            "comps": ",".join(comps),
+        }
 
     def get_initial_data(self):
         return self.initial_data
-
-
-def wrap_text(text, max_len=75):
-    lines = []
-    while len(text) > max_len:
-        semi_idx = text.rfind(";", 0, max_len)
-        space_idx = text.rfind(" ", 0, max_len)
-        break_idx = -1
-
-        if semi_idx != -1:
-            break_idx = semi_idx + 1
-        elif space_idx != -1:
-            break_idx = space_idx
-        else:
-            break_idx = max_len
-
-        lines.append(text[:break_idx].strip())
-        text = text[break_idx:].strip()
-
-    lines.append(text)
-    return "\n".join(lines)
-
-
-def resource_path(relative_path):
-
-    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
-    return os.path.join(base_path, relative_path)

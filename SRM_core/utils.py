@@ -1,22 +1,22 @@
 # core/parser.py
 from obspy import read_inventory
-from obspy.io.xseed import Parser as XSeedParser
 import os
+import sys
 
 
 def parse_response(path):
-
     try:
         return read_inventory(path)
     except Exception as e:
-        return None
+        return e
 
 
 def combine_resp(sensor_resp, recorder_resp):
     recorder_resp.response_stages.pop(0)
     sensor_stage0 = sensor_resp.response_stages[0]
     recorder_resp.response_stages.insert(0, sensor_stage0)
-    recorder_resp.instrument_sensitivity.input_units = sensor_stage0.input_units
+    recorder_resp.instrument_sensitivity.input_units = \
+        sensor_stage0.input_units
     recorder_resp.instrument_sensitivity.input_units_description = \
         sensor_stage0.input_units_description
     try:
@@ -26,3 +26,29 @@ def combine_resp(sensor_resp, recorder_resp):
         print(msg)
     return recorder_resp
 
+
+def wrap_text(text, max_len=75):
+    lines = []
+    while len(text) > max_len:
+        semi_idx = text.rfind(";", 0, max_len)
+        space_idx = text.rfind(" ", 0, max_len)
+        break_idx = -1
+
+        if semi_idx != -1:
+            break_idx = semi_idx + 1
+        elif space_idx != -1:
+            break_idx = space_idx
+        else:
+            break_idx = max_len
+
+        lines.append(text[:break_idx].strip())
+        text = text[break_idx:].strip()
+
+    lines.append(text)
+    return "\n".join(lines)
+
+
+def resource_path(relative_path):
+
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
