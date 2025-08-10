@@ -29,7 +29,12 @@ from copy import deepcopy
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QColor, QFont, QBrush
 from PyQt5.QtCore import Qt, QTimer, QDateTime
-from SRM_core.utils import combine_resp, resource_path, wrap_text
+from SRM_core.utils import (
+    combine_resp,
+    resource_path,
+    wrap_text,
+    convert_inventory_to_xml,
+)
 import os
 import sys
 from matplotlib.backends.backend_qt5agg import (
@@ -201,9 +206,7 @@ class MainWindow(QMainWindow):
             response_tab = ResponseTab(
                 response_data, self, explorer_tab, self.nrl_root
             )
-            index = self.tabs.addTab(
-                response_tab, f"Response - {response_id}"
-            )
+            index = self.tabs.addTab(response_tab, f"Response - {response_id}")
             self.open_tabs[key] = response_tab
             self.tabs.setCurrentIndex(index)
         else:
@@ -271,7 +274,45 @@ class MainWindow(QMainWindow):
                     print("Inventory creation from MiniSEED successful!")
 
     def convert_to_xml(self):
-        pass
+        input_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select an Input Dataless or RESP File",
+            "",
+            "Response Files (*.dataless *.resp);;All Files (*)",
+        )
+
+        if not input_path:
+            print("Operation cancelled by user (no input file selected).")
+            return
+
+        default_output_name = (
+            os.path.splitext(os.path.basename(input_path))[0] + ".xml"
+        )
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save StationXML File As...",
+            default_output_name,
+            "StationXML Files (*.xml);;All Files (*)",
+        )
+
+        if not output_path:
+            print("Operation cancelled by user (no output file selected).")
+            return
+
+        success, message = convert_inventory_to_xml(input_path, output_path)
+
+        msg_box = QMessageBox()
+        if success:
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setText("Conversion Successful!")
+        else:
+            msg_box.setIcon(QMessageBox.Critical)
+            msg_box.setText("Conversion Failed")
+
+        msg_box.setInformativeText(message)
+        msg_box.setWindowTitle("Conversion Status")
+        msg_box.exec_()
 
 
 class ManagerTab(QWidget):
@@ -287,9 +328,7 @@ class ManagerTab(QWidget):
         self.network_colors = {}
         self.file_tree = QTreeWidget()
         self.file_tree.setHeaderLabels(["Loaded Inventories"])
-        self.file_tree.itemDoubleClicked.connect(
-            self.handle_item_double_click
-        )
+        self.file_tree.itemDoubleClicked.connect(self.handle_item_double_click)
         left_layout.addWidget(self.file_tree)
         self.file_tree.itemSelectionChanged.connect(
             self.handle_selection_changed
@@ -401,9 +440,7 @@ class ManagerTab(QWidget):
 
     def paste_to_selected_item(self):
         if not self.clipboard_item:
-            QMessageBox.warning(
-                self, "Clipboard Empty", "Copy an item first."
-            )
+            QMessageBox.warning(self, "Clipboard Empty", "Copy an item first.")
             return
 
         target_item = self.file_tree.currentItem()
@@ -625,9 +662,7 @@ class ExplorerTab(QWidget):
     def create_new_field(self):
         item = self.tree.currentItem()
         if not item:
-            QMessageBox.warning(
-                self, "No Selection", "Please select an item."
-            )
+            QMessageBox.warning(self, "No Selection", "Please select an item.")
             return
 
         label_text = item.text(0)
@@ -814,9 +849,7 @@ class ExplorerTab(QWidget):
                                 item = QTreeWidgetItem(
                                     sta_item, [field, str(value)]
                                 )
-                                item.setFlags(
-                                    item.flags() | Qt.ItemIsEditable
-                                )
+                                item.setFlags(item.flags() | Qt.ItemIsEditable)
                                 item.setData(0, Qt.UserRole, (sta, field))
 
                     for chan in sta.channels:
@@ -843,9 +876,7 @@ class ExplorerTab(QWidget):
                                     item.setFlags(
                                         item.flags() | Qt.ItemIsEditable
                                     )
-                                    item.setData(
-                                        0, Qt.UserRole, (chan, field)
-                                    )
+                                    item.setData(0, Qt.UserRole, (chan, field))
                         resp = chan.response
                         if resp:
                             resp_item = QTreeWidgetItem(["Response", ""])
@@ -863,9 +894,7 @@ class ExplorerTab(QWidget):
                                     resp_item,
                                     [
                                         "Sensitivity Value",
-                                        str(
-                                            resp.instrument_sensitivity.value
-                                        ),
+                                        str(resp.instrument_sensitivity.value),
                                     ],
                                 )
                                 QTreeWidgetItem(
@@ -896,9 +925,7 @@ class ExplorerTab(QWidget):
                                         stage_item,
                                         [
                                             "Norm. Frequency",
-                                            str(
-                                                stage.normalization_frequency
-                                            ),
+                                            str(stage.normalization_frequency),
                                         ],
                                     )
 
@@ -1299,7 +1326,7 @@ class ResponseTab(QWidget):
                     label = (
                         f"{net.code}.{sta.code}."
                         f"{chan.location_code}.{chan.code}"
-                        )
+                    )
                     combo.addItem(label)
                     channel_map[label] = chan
 
@@ -1417,7 +1444,8 @@ class ResponseTab(QWidget):
                 return
 
             stage_builders = {
-                "Response Stage": self._build_response_stage,
+                "Response Stage":
+                    self._build_response_stage,
                 "Poles Zeros Response Stage":
                     self._build_poles_zeros_stage,
                 "Coefficients Type Response Stage":
@@ -1808,8 +1836,8 @@ class ResponseSelectionDialog(QDialog):
             keys, desc = wizard.get_result()
             if keys:
                 try:
-                    self.digitizer_response = (
-                        self.nrl.get_datalogger_response(keys)
+                    self.digitizer_response = self.nrl.get_datalogger_response(
+                        keys
                     )
                     self.digitizer_info = f"From NRL: {desc}"
                 except Exception as e:
@@ -1905,9 +1933,7 @@ class NRLWizard(QDialog):
         self.nrl_root = nrl_root
         self.stage = stage
 
-        initial_dir = os.path.normpath(
-            os.path.join(self.nrl_root, self.stage)
-        )
+        initial_dir = os.path.normpath(os.path.join(self.nrl_root, self.stage))
         self.path_stack = [(initial_dir, None)]
 
         self.selected_keys = []
@@ -2052,9 +2078,9 @@ class NRLWizard(QDialog):
 
         if self._final_xml_config:
             self.selected_keys.append(self.selected_option)
-            self.final_description = self.option_buttons[
-                self.selected_option
-            ][0].text()
+            self.final_description = self.option_buttons[self.selected_option][
+                0
+            ].text()
             self.accept()
             return
 
@@ -2164,8 +2190,14 @@ class StationInventoryWizard(QDialog):
         station_layout = QFormLayout()
         self.net_edit = QLineEdit("XX")
         self.sta_edit = QLineEdit("STA")
+        self.lat_edit = QLineEdit("0.0")
+        self.lon_edit = QLineEdit("0.0")
+        self.ele_edit = QLineEdit("0.0")
         station_layout.addRow("Network Code:", self.net_edit)
         station_layout.addRow("Station Code:", self.sta_edit)
+        station_layout.addRow("Latitude:", self.lat_edit)
+        station_layout.addRow("Longitude:", self.lon_edit)
+        station_layout.addRow("Elevation (m):", self.ele_edit)
         station_group.setLayout(station_layout)
         main_layout.addWidget(station_group)
         self.scroll = QScrollArea()
@@ -2183,7 +2215,6 @@ class StationInventoryWizard(QDialog):
         group1_box.setLayout(group1_layout)
         self.groups_layout.addWidget(group1_box)
         self.group2_box = QGroupBox("Channel Group 2 (Secondary)")
-        self.group2_box.setCheckable(False)
         self.groups[2] = self._create_channel_group_widgets()
         group2_layout = self._create_layout_from_widgets(self.groups[2])
         self.groups[2]["resp_btn"].clicked.connect(
@@ -2195,7 +2226,6 @@ class StationInventoryWizard(QDialog):
         self.toggle_group2_cb = QCheckBox("Enable Secondary Channel Group")
         self.toggle_group2_cb.toggled.connect(self.group2_box.setVisible)
         self.toggle_group2_cb.toggled.connect(self._on_toggle_group2)
-
         main_layout.insertWidget(2, self.toggle_group2_cb)
 
         self.button_box = QDialogButtonBox(
@@ -2219,9 +2249,6 @@ class StationInventoryWizard(QDialog):
             "loc": loc_edit,
             "base": QLineEdit("HH"),
             "comp": comp_edit,
-            "lat": QLineEdit("0.0"),
-            "lon": QLineEdit("0.0"),
-            "ele": QLineEdit("0.0"),
             "depth": QLineEdit("0.0"),
             "date": QDateTimeEdit(QDateTime.currentDateTimeUtc()),
             "resp_label": QLabel("Not Selected"),
@@ -2231,25 +2258,24 @@ class StationInventoryWizard(QDialog):
         }
 
     def _create_layout_from_widgets(self, widgets):
-        """Builds a QFormLayout from a dictionary of widgets."""
         layout = QFormLayout()
         widgets["date"].setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         layout.addRow("Location Code(s):", widgets["loc"])
         layout.addRow("Channel Base Code:", widgets["base"])
         layout.addRow("Channel Components:", widgets["comp"])
         layout.addRow("Start Date:", widgets["date"])
-        layout.addRow("Latitude:", widgets["lat"])
-        layout.addRow("Longitude:", widgets["lon"])
-        layout.addRow("Elevation (m):", widgets["ele"])
-        layout.addRow("Depth (m):", widgets["depth"])
+        layout.addRow("Sensor Depth (m):", widgets["depth"])
         layout.addRow("Instrument Response:", widgets["resp_label"])
         layout.addRow(widgets["resp_btn"])
         return layout
 
     def _populate_from_initial_data(self, data):
-        """Pre-fills the form with data from MiniSEED import."""
         self.net_edit.setText(data.get("net", ""))
         self.sta_edit.setText(data.get("sta", ""))
+        self.lat_edit.setText(data.get("lat", "0.0"))
+        self.lon_edit.setText(data.get("lon", "0.0"))
+        self.ele_edit.setText(data.get("ele", "0.0"))
+
         if "group1" in data:
             g1_data = data["group1"]
             self.groups[1]["loc"].setText(g1_data.get("locs", ""))
@@ -2318,17 +2344,38 @@ class StationInventoryWizard(QDialog):
                 super().accept()
         except Exception as e:
             QMessageBox.critical(
-                self,
-                "Build Error",
-                f"Failed to build or save inventory:\n{e}",
+                self, "Build Error", f"Failed to build or save inventory:\n{e}"
             )
 
     def _validate_inputs(self):
-        if not all([self.net_edit.text(), self.sta_edit.text()]):
+        if not all(
+            [
+                self.net_edit.text(),
+                self.sta_edit.text(),
+                self.lat_edit.text(),
+                self.lon_edit.text(),
+                self.ele_edit.text(),
+            ]
+        ):
             QMessageBox.warning(
-                self, "Input Error", "Network and Station codes are required."
+                self,
+                "Input Error",
+                "All Station Parameter fields"
+                " (Codes, Lat, Lon, Ele) are required.",
             )
             return False
+        try:
+            float(self.lat_edit.text())
+            float(self.lon_edit.text())
+            float(self.ele_edit.text())
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Input Error",
+                "Latitude, Longitude, and Elevation must be valid numbers.",
+            )
+            return False
+
         try:
             self._parse_channel_group(self.groups[1], "Group 1")
             if self.toggle_group2_cb.isChecked():
@@ -2351,7 +2398,14 @@ class StationInventoryWizard(QDialog):
             )
         if not widgets["response_obj"]:
             raise ValueError(
-                f"{group_name}: An instrument response must be selected."
+                f"{group_name}: An instrument response must be"
+                f" selected for {group_name}."
+            )
+        try:
+            float(widgets["depth"].text())
+        except ValueError:
+            raise ValueError(
+                f"{group_name}: Sensor Depth must be a valid number."
             )
 
         locs = [
@@ -2367,13 +2421,11 @@ class StationInventoryWizard(QDialog):
 
         if len(locs) != 1 and len(locs) != len(comps):
             raise ValueError(
-                f"{group_name}: The number of Location Codes must be 1 or "
-                f"match the number of Channel Components."
+                f"{group_name}: The number of Location Codes must"
+                f" be 1 or match the number of Channel Components."
             )
-
         if len(locs) == 1 and len(comps) > 1:
             locs = locs * len(comps)
-
         return locs, comps
 
     def _build_inventory(self):
@@ -2386,13 +2438,14 @@ class StationInventoryWizard(QDialog):
                 self._build_channels_for_group(self.groups[2], "Group 2")
             )
 
-        g1w = self.groups[1]
+        creation_dt = self.groups[1]["date"].dateTime().toPyDateTime()
+
         station = Station(
             code=self.sta_edit.text().upper(),
-            latitude=float(g1w["lat"].text()),
-            longitude=float(g1w["lon"].text()),
-            elevation=float(g1w["ele"].text()),
-            creation_date=UTCDateTime(g1w["date"].dateTime().toPyDateTime()),
+            latitude=float(self.lat_edit.text()),
+            longitude=float(self.lon_edit.text()),
+            elevation=float(self.ele_edit.text()),
+            creation_date=UTCDateTime(creation_dt),
             channels=all_channels,
         )
         network = Network(
@@ -2407,9 +2460,17 @@ class StationInventoryWizard(QDialog):
         locs, comps = self._parse_channel_group(widgets, group_name)
         base = widgets["base"].text().upper()
 
+        station_lat = float(self.lat_edit.text())
+        station_lon = float(self.lon_edit.text())
+        station_ele = float(self.ele_edit.text())
+
+        sensor_depth = float(widgets["depth"].text())
+        start_date = UTCDateTime(widgets["date"].dateTime().toPyDateTime())
+        response = widgets["response_obj"]
+
         for i, comp in enumerate(comps):
             code = base + comp
-            az, dip = (0, 0)
+            az, dip = 0, 0
             if comp.endswith("E"):
                 az, dip = 90, 0
             elif comp.endswith("N"):
@@ -2417,27 +2478,25 @@ class StationInventoryWizard(QDialog):
             elif comp.endswith("Z"):
                 az, dip = 0, -90
 
-            response = widgets["response_obj"]
             rate = (
                 response.instrument_sensitivity.frequency
                 if isinstance(response, Response)
-                else 100.0
+                and response.instrument_sensitivity
+                else 1.0
             )
 
             channels.append(
                 Channel(
                     code=code,
                     location_code=locs[i],
-                    latitude=float(widgets["lat"].text()),
-                    longitude=float(widgets["lon"].text()),
-                    elevation=float(widgets["ele"].text()),
-                    depth=float(widgets["depth"].text()),
+                    latitude=station_lat,
+                    longitude=station_lon,
+                    elevation=station_ele,
+                    depth=sensor_depth,
                     azimuth=az,
                     dip=dip,
                     sample_rate=rate,
-                    start_date=UTCDateTime(
-                        widgets["date"].dateTime().toPyDateTime()
-                    ),
+                    start_date=start_date,
                     response=response,
                 )
             )

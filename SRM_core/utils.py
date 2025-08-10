@@ -52,3 +52,18 @@ def resource_path(relative_path):
 
     base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
     return os.path.join(base_path, relative_path)
+
+
+def convert_inventory_to_xml(input_path: str, output_path: str):
+    try:
+        inventory = read_inventory(input_path)
+        inventory.write(output_path, format="STATIONXML")
+
+        success_message = (
+            f"Successfully converted and saved file to:\n{output_path}"
+        )
+        return True, success_message
+
+    except Exception as e:
+        error_message = f"An error occurred during conversion.\n\nDetails: {e}"
+        return False, error_message
