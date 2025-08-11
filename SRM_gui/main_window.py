@@ -1051,6 +1051,7 @@ class ResponseTab(QWidget):
     def __init__(self, response_data, main_window, explorer_tab, nrl_root):
         super().__init__()
         self.response = response_data
+        self.original_response = deepcopy(response_data)
         self.main_window = main_window
         self.explorer_tab = explorer_tab
         self.nrl_root = nrl_root
@@ -1099,8 +1100,8 @@ class ResponseTab(QWidget):
         replace_button.clicked.connect(self.replace_response)
         btn_layout.addWidget(replace_button)
 
-        save_btn = QPushButton("Save Response")
-        save_btn.clicked.connect(self.save_edited_response)
+        save_btn = QPushButton("Revert Response")
+        save_btn.clicked.connect(self.revert_response)
         btn_layout.addWidget(save_btn)
         left_layout.addLayout(btn_layout)
         splitter.addWidget(left_widget)
@@ -1150,9 +1151,13 @@ class ResponseTab(QWidget):
             )
         self.canvas.draw()
 
-    def save_edited_response(self):
-        if hasattr(self, "selected_response"):
-            self.explorer_tab.apply_modified_response(self.selected_response)
+    def revert_response(self):
+        self.response = deepcopy(self.original_response)
+        self.load_response_editor(self.response)
+        QMessageBox.information(
+            self, "Reverted",
+            "All changes in this tab have been reverted."
+            )
 
     def populate_stage_tree(self, response):
         self.stage_tree.clear()
