@@ -1375,7 +1375,7 @@ class ResponseTab(QWidget):
     def replace_response(self):
         dlg = ResponseSelectionDialog(self.nrl_root, self)
         dlg.exec_()
-        new_resp = dlg.get_response()
+        new_resp, _, _ = dlg.get_response()
         if (
             new_resp
             and hasattr(self, "selected_response")
@@ -1391,7 +1391,7 @@ class ResponseTab(QWidget):
             self.load_response_editor(self.selected_response)
             self.plot_response(self.selected_response)
             QMessageBox.information(
-                self, "Success", "Response loaded from local NRL."
+                self, "Success", "Response updated."
             )
 
     def new(self):
