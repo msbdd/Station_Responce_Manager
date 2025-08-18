@@ -2,6 +2,7 @@
 from obspy import read_inventory
 import os
 import sys
+import re
 
 
 def parse_response(path):
@@ -67,3 +68,11 @@ def convert_inventory_to_xml(input_path: str, output_path: str):
     except Exception as e:
         error_message = f"An error occurred during conversion.\n\nDetails: {e}"
         return False, error_message
+
+
+def natural_sort_key(s: str):
+    return [
+        int(chunk) if chunk.isdigit() else chunk.lower()
+        for chunk in re.split(r"(\d+)", s)
+        if chunk
+    ]

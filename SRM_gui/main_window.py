@@ -34,6 +34,7 @@ from SRM_core.utils import (
     resource_path,
     wrap_text,
     convert_inventory_to_xml,
+    natural_sort_key
 )
 import os
 import sys
@@ -2021,7 +2022,7 @@ class NRLWizard(QDialog):
         base_dir = current_dir
 
         sections = sorted(
-            [s for s in config.sections() if s != "Main"], key=str.lower
+            [s for s in config.sections() if s != "Main"], key=natural_sort_key
         )
         for section in sections:
             raw_path = (
@@ -2056,7 +2057,9 @@ class NRLWizard(QDialog):
         self.question_label.setText(question)
 
         self.option_buttons = {}
-        for section in [s for s in config.sections() if s != "Main"]:
+        for section in sorted(
+            [s for s in config.sections() if s != "Main"], key=natural_sort_key
+                ):
             desc = (
                 config.get(section, "description", fallback="")
                 .strip()
